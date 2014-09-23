@@ -26,7 +26,7 @@ class Setup {
 		 * wp_enqueue_script() function, which safely handles any script
 		 * dependencies.
 		 */
-		wp_register_script( 'content-staging', $this->plugin_url . '/assets/js/content-staging.js', array( 'jquery' ), '1.0', false );
+		wp_register_script( 'content-staging', $this->plugin_url . '/assets/js/content-staging.js', array( 'jquery' ), '1.1', false );
 
 		// Register CSS stylesheet files for later use with wp_enqueue_style().
 		wp_register_style( 'content-staging', $this->plugin_url . '/assets/css/content-staging.css', array(), '1.0' );
@@ -69,25 +69,25 @@ class Setup {
 		);
 
 		// Arguments for batch importer post type
-		$importer = array(
-			'label'  => __( 'Batch Importers', 'sme-content-staging' ),
+		$import_job = array(
+			'label'  => __( 'Batch Import Jobs', 'sme-content-staging' ),
 			'labels' => array(
-				'singular_name'      => __( 'Batch Importers', 'sme-content-staging' ),
-				'add_new_item'       => __( 'Add New Batch Importer', 'sme-content-staging' ),
-				'edit_item'          => __( 'Edit Batch Importer', 'sme-content-staging' ),
-				'new_item'           => __( 'New Batch Importer', 'sme-content-staging' ),
-				'view_item'          => __( 'View Batch Importer', 'sme-content-staging' ),
-				'search_items'       => __( 'Search Batch Importers', 'sme-content-staging' ),
-				'not_found'          => __( 'No Batch Importers found', 'sme-content-staging' ),
-				'not_found_in_trash' => __( 'No Batch Importers found in Trash', 'sme-content-staging' )
+				'singular_name'      => __( 'Batch Import Jobs', 'sme-content-staging' ),
+				'add_new_item'       => __( 'Add New Batch Import Job', 'sme-content-staging' ),
+				'edit_item'          => __( 'Edit Batch Import Job', 'sme-content-staging' ),
+				'new_item'           => __( 'New Batch Import Job', 'sme-content-staging' ),
+				'view_item'          => __( 'View Batch Import Job', 'sme-content-staging' ),
+				'search_items'       => __( 'Search Batch Import Jobs', 'sme-content-staging' ),
+				'not_found'          => __( 'No Batch Import Jobs found', 'sme-content-staging' ),
+				'not_found_in_trash' => __( 'No Batch Import Jobs found in Trash', 'sme-content-staging' )
 			),
-			'description' => __( 'Batches are imported by Batch Importers.', 'sme-content-staging' ),
+			'description' => __( 'Batches are packaged in Batch Import Jobs that in turn is imported by Batch Importers.', 'sme-content-staging' ),
 			'public'      => false,
 			'supports'    => array( 'editor' ),
 		);
 
 		register_post_type( 'sme_content_batch', $batch );
-		register_post_type( 'sme_batch_importer', $importer );
+		register_post_type( 'sme_batch_import_job', $import_job );
 
 
 	}
@@ -96,9 +96,9 @@ class Setup {
 		add_menu_page( 'Content Staging', 'Content Staging', 'manage_options', 'sme-list-batches', array( $this->batch_ctrl, 'list_batches' ) );
 		add_submenu_page( null, 'Edit Batch', 'Edit', 'manage_options', 'sme-edit-batch', array( $this->batch_ctrl, 'edit_batch' ) );
 		add_submenu_page( null, 'Delete Batch', 'Delete', 'manage_options', 'sme-delete-batch', array( $this->batch_ctrl, 'confirm_delete_batch' ) );
-		add_submenu_page( null, 'Quick Deploy Batch', 'Quick Deploy', 'manage_options', 'sme-quick-deploy-batch', array( $this->batch_ctrl, 'quick_deploy_batch' ) );
-		add_submenu_page( null, 'Pre-Flight Batch', 'Pre-Flight', 'manage_options', 'sme-preflight-batch', array( $this->batch_ctrl, 'preflight_batch' ) );
-		add_submenu_page( null, 'Deploy Batch', 'Deploy', 'manage_options', 'sme-send-batch', array( $this->batch_ctrl, 'deploy_batch' ) );
+		add_submenu_page( null, 'Pre-Flight Batch', 'Pre-Flight', 'manage_options', 'sme-preflight-batch', array( $this->batch_ctrl, 'prepare' ) );
+		add_submenu_page( null, 'Quick Deploy Batch', 'Quick Deploy', 'manage_options', 'sme-quick-deploy-batch', array( $this->batch_ctrl, 'quick_deploy' ) );
+		add_submenu_page( null, 'Deploy Batch', 'Deploy', 'manage_options', 'sme-send-batch', array( $this->batch_ctrl, 'deploy' ) );
 	}
 
 	/**
@@ -122,9 +122,8 @@ class Setup {
 	 */
 	public function register_xmlrpc_methods( $methods ) {
 
-		$methods['smeContentStaging.preflight']    = array( $this->batch_ctrl, 'preflight' );
-		$methods['smeContentStaging.deploy']       = array( $this->batch_ctrl, 'deploy' );
-		$methods['smeContentStaging.deployStatus'] = array( $this->batch_ctrl, 'deploy_status' );
+		$methods['smeContentStaging.verify'] = array( $this->batch_ctrl, 'verify' );
+		$methods['smeContentStaging.import'] = array( $this->batch_ctrl, 'import' );
 
 		return $methods;
 	}

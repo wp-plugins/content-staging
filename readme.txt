@@ -62,3 +62,9 @@ third-party developers.
 2. Select what posts, pages or custom post types you want to include in your batch.
 3. Pre-Flight your batch to make sure it is ready for deployment.
 4. Deploy your batch from staging environment to your live site.
+
+== Changelog ==
+
+= 1.1 =
+* New AJAX importer to use when Background importer is not an option.
+* Pagination on Edit Batch page.
