@@ -1,12 +1,12 @@
 <?php
 namespace Me\Stenberg\Content\Staging;
 
-use Me\Stenberg\Content\Staging\DB\Batch_Importer_DAO;
+use Me\Stenberg\Content\Staging\DB\Batch_Import_Job_DAO;
 use Me\Stenberg\Content\Staging\DB\Post_DAO;
 use Me\Stenberg\Content\Staging\DB\Postmeta_DAO;
 use Me\Stenberg\Content\Staging\DB\Term_DAO;
 use Me\Stenberg\Content\Staging\DB\User_DAO;
-use Me\Stenberg\Content\Staging\Models\Batch_Importer;
+use Me\Stenberg\Content\Staging\Models\Batch_Import_Job;
 use Me\Stenberg\Content\Staging\Models\Post;
 use Me\Stenberg\Content\Staging\Models\Relationships\Post_Taxonomy;
 use Me\Stenberg\Content\Staging\Models\Taxonomy;
@@ -18,12 +18,12 @@ use Me\Stenberg\Content\Staging\Models\Term;
  * @package Me\Stenberg\Content\Staging
  *
  * @todo Consider moving 'import_*' methods in this class to the
- * Batch_Importer model. Might want an import per import type though,
+ * Batch_Import_Job model. Might want an import per import type though,
  * e.g. a Post_Importer etc.
  */
 class Import_Batch {
 
-	private $batch_importer_dao;
+	private $import_job_dao;
 	private $post_dao;
 	private $postmeta_dao;
 	private $term_dao;
@@ -79,15 +79,15 @@ class Import_Batch {
 	/**
 	 * Construct object, dependencies are injected.
 	 *
-	 * @param Batch_Importer_DAO $batch_importer_dao
+	 * @param Batch_Import_Job_DAO $import_job_dao
 	 * @param Post_DAO $post_dao
 	 * @param Postmeta_DAO $postmeta_dao
 	 * @param Term_DAO $term_dao
 	 * @param User_DAO $user_dao
 	 */
-	public function __construct( Batch_Importer_DAO $batch_importer_dao, Post_DAO $post_dao,
-								 Postmeta_DAO $postmeta_dao, Term_DAO $term_dao, User_DAO $user_dao ) {
-		$this->batch_importer_dao    = $batch_importer_dao;
+	public function __construct( Batch_Import_Job_DAO $import_job_dao, Post_DAO $post_dao, Postmeta_DAO $postmeta_dao,
+								 Term_DAO $term_dao, User_DAO $user_dao ) {
+		$this->import_job_dao        = $import_job_dao;
 		$this->post_dao              = $post_dao;
 		$this->postmeta_dao          = $postmeta_dao;
 		$this->term_dao              = $term_dao;
@@ -105,7 +105,7 @@ class Import_Batch {
 	public function init() {
 
 		// Make sure an importer ID has been provided.
-		if ( ! isset( $_GET['sme_batch_importer_id'] ) || ! $_GET['sme_batch_importer_id'] ) {
+		if ( ! isset( $_GET['sme_batch_import_job_id'] ) || ! $_GET['sme_batch_import_job_id'] ) {
 			return;
 		}
 
@@ -114,11 +114,11 @@ class Import_Batch {
 			return;
 		}
 
-		$importer_id = intval( $_GET['sme_batch_importer_id'] );
+		$importer_id = intval( $_GET['sme_batch_import_job_id'] );
 		$import_key  = $_GET['sme_import_batch_key'];
 
 		// Get batch importer from database.
-		$importer = $this->batch_importer_dao->get_importer_by_id( $importer_id );
+		$importer = $this->import_job_dao->get_job_by_id( $importer_id );
 
 		// No importer found, error.
 		if ( ! $importer ) {
@@ -133,9 +133,8 @@ class Import_Batch {
 		}
 
 		// Import running.
-		$importer->set_status( 1 );
 		$importer->generate_key();
-		$this->batch_importer_dao->update_importer( $importer );
+		$this->import_job_dao->update_job( $importer );
 
 		// Get the batch.
 		$batch = $importer->get_batch();
@@ -156,7 +155,7 @@ class Import_Batch {
 
 		// Import postmeta.
 		foreach ( $batch->get_posts() as $post ) {
-			$this->import_postmeta( $post->get_meta() );
+			$this->import_postmeta( $post );
 		}
 
 		// Update relationship between posts and their parents.
@@ -172,14 +171,14 @@ class Import_Batch {
 		// Import finished, set success message and update import status.
 		$importer->add_message( 'Batch has been successfully imported!', 'success' );
 		$importer->set_status( 3 );
-		$this->batch_importer_dao->update_importer( $importer );
+		$this->import_job_dao->update_job( $importer );
 
 		/*
 		 * Delete importer. Importer is not actually deleted, just set to draft
 		 * mode. This is important since we need to access e.g. meta data telling
 		 * us the status of the import even when import has finished.
 		 */
-		$this->batch_importer_dao->delete_importer( $importer );
+		$this->import_job_dao->delete_job( $importer );
 	}
 
 	/**
@@ -288,7 +287,6 @@ class Import_Batch {
 		} else {
 			// This post exists on production, update it.
 			$this->post_dao->update_post( $post );
-			$this->postmeta_dao->delete_postmeta( array( 'post_id' => $post->get_id() ), array( '%d' ) );
 		}
 
 		$this->post_relations[$stage_post_id] = $post->get_id();
@@ -308,7 +306,7 @@ class Import_Batch {
 	}
 
 	/**
-	 * Import postmeta.
+	 * Import postmeta for a specific post.
 	 *
 	 * Never call before all posts has been imported! In case you do
 	 * relationships between post IDs on content stage and production has not
@@ -319,36 +317,39 @@ class Import_Batch {
 	 * The content staging post ID is used as a key in the post relations
 	 * array and the production post ID is used as value.
 	 *
-	 * @param array $postmeta
+	 * @param Post $post
 	 */
-	private function import_postmeta( array $postmeta ) {
+	private function import_postmeta( Post $post ) {
 
-		foreach ( $postmeta as $meta ) {
-			if ( in_array( $meta['meta_key'], $this->postmeta_keys ) ) {
+		$meta = $post->get_meta();
+
+		for ( $i = 0; $i < count($meta); $i++ ) {
+			if ( in_array( $meta[$i]['meta_key'], $this->postmeta_keys ) ) {
 
 				/*
 				 * The meta value must be an integer pointing at the ID of the post
-				 * that the post whose postmeta we are currently importing has a
+				 * that the post whose post meta we are currently importing has a
 				 * relationship to.
 				 */
-				if ( isset( $this->post_relations[$meta['meta_value']] ) ) {
-					$meta['meta_value'] = $this->post_relations[$meta['meta_value']];
+				if ( isset( $this->post_relations[$meta[$i]['meta_value']] ) ) {
+					$meta[$i]['meta_value'] = $this->post_relations[$meta[$i]['meta_value']];
 				} else {
-					error_log( 'Trying to update dependency between posts. Relationship is defined in postmeta (post_id: ' . $this->post_relations[$meta['post_id']] . ', meta_key: ' . $meta['meta_key'] . ', meta_value: ' . $meta['meta_value'] . ') where post_id is the post ID that has a relationship to the post defined in meta_value. If meta_value does not contain a valid post ID relationship between posts cannot be maintained.' );
+					error_log( 'Trying to update dependency between posts. Relationship is defined in postmeta (post_id: ' . $this->post_relations[$meta[$i]['post_id']] . ', meta_key: ' . $meta[$i]['meta_key'] . ', meta_value: ' . $meta[$i]['meta_value'] . ') where post_id is the post ID that has a relationship to the post defined in meta_value. If meta_value does not contain a valid post ID relationship between posts cannot be maintained.' );
 				}
 			}
 
-			$meta['post_id'] = $this->post_relations[$meta['post_id']];
-			$this->postmeta_dao->insert_postmeta( $meta );
+			$meta[$i]['post_id'] = $this->post_relations[$meta[$i]['post_id']];
 		}
+
+		$this->postmeta_dao->update_postmeta_by_post( $post->get_id(), $meta );
 	}
 
 	/**
 	 * Import attachments.
 	 *
-	 * @param Batch_Importer $importer
+	 * @param Batch_Import_Job $importer
 	 */
-	private function import_attachments( Batch_Importer $importer ) {
+	private function import_attachments( Batch_Import_Job $importer ) {
 
 		$attachments = $importer->get_batch()->get_attachments();
 
@@ -464,9 +465,9 @@ class Import_Batch {
 	/**
 	 * Import data added by a third-party.
 	 *
-	 * @param Batch_Importer $importer
+	 * @param Batch_Import_Job $importer
 	 */
-	private function import_custom_data( Batch_Importer $importer ) {
+	private function import_custom_data( Batch_Import_Job $importer ) {
 		foreach ( $importer->get_batch()->get_custom_data() as $addon => $data ) {
 			do_action( 'sme_import_' . $addon, $data, $importer );
 		}

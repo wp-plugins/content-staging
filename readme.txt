@@ -4,7 +4,7 @@ Donate link: https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_i
 Tags: staging, stage, deploy, deploying, sync, syncing, environment, environments, database, databases, enterprise
 Requires at least: 3.7
 Tested up to: 4.0
-Stable tag: trunk
+Stable tag: 1.1
 License: GPLv2
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -62,3 +62,9 @@ third-party developers.
 2. Select what posts, pages or custom post types you want to include in your batch.
 3. Pre-Flight your batch to make sure it is ready for deployment.
 4. Deploy your batch from staging environment to your live site.
+
+== Changelog ==
+
+= 1.1 =
+* New AJAX importer to use when Background importer is not an option.
+* Pagination on Edit Batch page.
