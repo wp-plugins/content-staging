@@ -317,24 +317,22 @@ abstract class Batch_Importer {
 
 	/**
 	 * Import attachments.
-	 *
-	 * @param Batch_Import_Job $importer
 	 */
-	protected function import_attachments( Batch_Import_Job $importer ) {
+	protected function import_attachments() {
 
-		$attachments = $importer->get_batch()->get_attachments();
+		$attachments = $this->job->get_batch()->get_attachments();
 
 		/*
 		 * Make it possible for third-party developers to inject their custom
 		 * attachment import functionality.
 		 */
-		do_action( 'sme_import_attachments', $attachments, $importer );
+		do_action( 'sme_import_attachments', $attachments, $this->job );
 
 		/*
 		 * Make it possible for third-party developers to alter the list of
 		 * attachments to import.
 		 */
-		$attachments = apply_filters( 'sme_import_attachments', $attachments, $importer );
+		$attachments = apply_filters( 'sme_import_attachments', $attachments, $this->job );
 
 		foreach ( $attachments as $attachment ) {
 			$this->import_attachment( $attachment );
@@ -345,14 +343,39 @@ abstract class Batch_Importer {
 	 * Import a single attachment.
 	 *
 	 * @param array $attachment
+	 * @return bool
 	 */
 	protected function import_attachment( array $attachment ) {
 		$upload_dir = wp_upload_dir();
 		$path       = $attachment['path'];
 		$filepath   = $upload_dir['basedir'] . '/' . $path . '/';
 
-		if ( ! is_dir( $filepath ) ) {
-			mkdir( $filepath );
+		if ( ! is_dir( $filepath ) && ! wp_mkdir_p( $filepath ) ) {
+			/*
+			 * Directory to place image in does not exist and we were not able to
+			 * create it. Create and set an error message.
+			 */
+
+			$failed_attachment = '';
+
+			if ( isset( $attachment['sizes'][0] ) ) {
+				$failed_attachment = sprintf(
+					' Attachment %s and generated sizes could not be deployed to production. This is most likely a file permission error, make sure your web server can write to the image upload directory.',
+					pathinfo( $attachment['sizes'][0], PATHINFO_BASENAME )
+				);
+			}
+
+			// Add error message.
+			$this->job->add_message(
+				sprintf(
+					'Failed creating directory %s.%s',
+					$filepath,
+					$failed_attachment
+				),
+				'warning'
+			);
+
+			return false;
 		}
 
 		foreach ( $attachment['sizes'] as $size ) {
@@ -363,6 +386,8 @@ abstract class Batch_Importer {
 				file_put_contents( $filepath . $basename, $image );
 			}
 		}
+
+		return true;
 	}
 
 	/**
