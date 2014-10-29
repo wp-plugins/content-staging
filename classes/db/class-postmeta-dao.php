@@ -1,10 +1,15 @@
 <?php
 namespace Me\Stenberg\Content\Staging\DB;
 
+use Me\Stenberg\Content\Staging\Models\Model;
+
 class Postmeta_DAO extends DAO {
+
+	private $table;
 
 	public function __construct( $wpdb ) {
 		parent::__constuct( $wpdb );
+		$this->table = $wpdb->postmeta;
 	}
 
 	/**
@@ -144,6 +149,22 @@ class Postmeta_DAO extends DAO {
 			$this->update_postmeta( $record );
 		}
 	}
+
+	/**
+	 * @return string
+	 */
+	protected function get_table() {
+		return $this->table;
+	}
+
+	protected function target_class() {}
+	protected function unique_key( array $raw ) {}
+	protected function select_stmt() {}
+	protected function select_by_ids_stmt( array $ids ) {}
+	protected function do_insert( Model $obj ) {}
+	protected function do_create_object( array $raw ) {}
+	protected function do_create_array( Model $obj ) {}
+	protected function format() {}
 
 	/**
 	 * Go through provided postmeta and filter out all values that we accept
