@@ -1,9 +1,9 @@
 <?php
 namespace Me\Stenberg\Content\Staging\Controllers;
 
-use Me\Stenberg\Content\Staging\Background_Process;
 use Me\Stenberg\Content\Staging\DB\Batch_DAO;
 use Me\Stenberg\Content\Staging\DB\Batch_Import_Job_DAO;
+use Me\Stenberg\Content\Staging\Helper_Factory;
 use Me\Stenberg\Content\Staging\Importers\Batch_Importer_Factory;
 use Me\Stenberg\Content\Staging\Managers\Batch_Mgr;
 use Me\Stenberg\Content\Staging\Models\Batch;
@@ -24,16 +24,14 @@ class Batch_Ctrl {
 	private $batch_dao;
 	private $post_dao;
 
-	public function __construct( Template $template, Batch_Mgr $batch_mgr, Client $xmlrpc_client,
-								 Batch_Importer_Factory $importer_factory, Batch_Import_Job_DAO $batch_import_job_dao,
-								 Batch_DAO $batch_dao, Post_DAO $post_dao ) {
+	public function __construct( Template $template, Client $xmlrpc_client, Batch_Importer_Factory $importer_factory ) {
 		$this->template             = $template;
-		$this->batch_mgr            = $batch_mgr;
+		$this->batch_mgr            = new Batch_Mgr();
 		$this->xmlrpc_client        = $xmlrpc_client;
 		$this->importer_factory     = $importer_factory;
-		$this->batch_import_job_dao = $batch_import_job_dao;
-		$this->batch_dao            = $batch_dao;
-		$this->post_dao             = $post_dao;
+		$this->batch_import_job_dao = Helper_Factory::get_instance()->get_dao( 'Batch_Import_Job' );
+		$this->batch_dao            = Helper_Factory::get_instance()->get_dao( 'Batch' );
+		$this->post_dao             = Helper_Factory::get_instance()->get_dao( 'Post' );
 	}
 
 	/**
@@ -62,16 +60,17 @@ class Batch_Ctrl {
 			$paged = $_GET['paged'];
 		}
 
-		$total_batches = $this->batch_dao->get_published_content_batches_count();
-		$batches       = $this->batch_dao->get_published_content_batches( $order_by, $order, $per_page, $paged );
+		$status  = apply_filters( 'sme_batch_list_statuses', array( 'publish' ) );
+		$count   = $this->batch_dao->count( $status );
+		$batches = $this->batch_dao->get_batches( $status, $order_by, $order, $per_page, $paged );
 
 		// Prepare table of batches.
 		$table        = new Batch_Table();
 		$table->items = $batches;
-
+		$table->set_bulk_actions( array( 'delete' => 'Delete' ) );
 		$table->set_pagination_args(
 			array(
-				'total_items' => $total_batches,
+				'total_items' => $count,
 				'per_page'    => $per_page,
 			)
 		);
@@ -124,16 +123,12 @@ class Batch_Ctrl {
 			$paged = $_GET['paged'];
 		}
 
-		// Get posts user can select to include in the batch.
-		$posts = $this->post_dao->get_published_posts( $order_by, $order, $per_page, $paged );
-		$posts = $this->sort_posts( $posts );
-
 		// Get IDs of posts user has selected to include in this batch.
 		$post_ids = $this->batch_dao->get_post_meta( $batch->get_id(), 'sme_selected_post_ids', true );
 
 		/*
 		 * When fetching post IDs an empty string could be returned if no
-		 * post meta record with the given key exist since before. To prevent
+		 * post meta record with the given key exist since before. To
 		 * ensure the system can rely on us working with an array we perform a
 		 * check setting $post_ids to array if it is currently an empty.
 		 */
@@ -141,10 +136,21 @@ class Batch_Ctrl {
 			$post_ids = array();
 		}
 
+		// Get selected posts.
+		$selected_posts = array();
+		$chunks         = array_chunk( $post_ids, $per_page );
+		if ( isset( $chunks[( $paged - 1 )] ) ) {
+			$use_post_ids   = $chunks[( $paged - 1 )];
+			$selected_posts = $this->post_dao->find_by_ids( $use_post_ids );
+		}
+
+		// Get posts user can select to include in the batch.
+		$posts       = $this->post_dao->get_published_posts( $order_by, $order, $per_page, $paged, $post_ids );
 		$total_posts = $this->post_dao->get_published_posts_count();
+		$posts       = array_merge( $selected_posts, $posts );
 
 		// Create and prepare table of posts.
-		$table        = new Post_Table( $batch, $post_ids );
+		$table        = new Post_Table( $batch );
 		$table->items = $posts;
 		$table->set_pagination_args(
 			array(
@@ -154,13 +160,97 @@ class Batch_Ctrl {
 		);
 		$table->prepare_items();
 
+		$type = get_post_type_object( 'sme_content_batch' );
+		if ( ! $batch->get_id() ) {
+			$label = $type->labels->new_item;
+		} else {
+			$label = $type->labels->edit_item;
+		}
+
+		// Custom filters for finding posts to include in batch.
+		$filters = apply_filters( 'sme_post_filters', $filters = '', $table );
+
 		$data = array(
 			'batch'    => $batch,
+			'label'    => $label,
+			'filters'  => $filters,
 			'table'    => $table,
 			'post_ids' => implode( ',', $post_ids ),
 		);
 
 		$this->template->render( 'edit-batch', $data );
+	}
+
+	/**
+	 * Save batch data user has submitted through form.
+	 */
+	public function save_batch() {
+
+		// Check that the current request carries a valid nonce.
+		check_admin_referer( 'sme-save-batch', 'sme_save_batch_nonce' );
+
+		// Make sure a query param ID exists in current URL.
+		if ( ! isset( $_GET['id'] ) ) {
+			wp_die( __( 'No batch ID has been provided.', 'sme-content-staging' ) );
+		}
+
+		// Get batch.
+		$batch_id = $_GET['id'] > 0 ? intval( $_GET['id'] ) : null;
+		$batch    = $this->batch_mgr->get_batch( $batch_id, true );
+
+		/*
+		 * Make it possible for third-party developers to modify 'Save Batch'
+		 * behaviour.
+		 */
+		do_action( 'sme_save_batch', $batch );
+
+		// Handle input data.
+		$updated = '';
+		if ( isset( $_POST['submit'] ) ) {
+			$this->handle_edit_batch_form_data( $batch, $_POST );
+			$updated = '&updated';
+		}
+
+		// Default redirect URL on successful batch update.
+		$redirect_url = admin_url( 'admin.php?page=sme-edit-batch&id=' . $batch->get_id() . $updated );
+
+		// Set different redirect URL if user has requested a pre-flight.
+		if ( isset( $_POST['submit'] ) && $_POST['submit'] === 'Pre-Flight Batch' ) {
+			$redirect_url = admin_url( 'admin.php?page=sme-preflight-batch&id=' . $batch->get_id() );
+		}
+
+		// Redirect user.
+		wp_redirect( $redirect_url );
+		exit();
+	}
+
+	/**
+	 * Delete a batch.
+	 */
+	public function delete_batch() {
+
+		// Make sure a query param ID exists in current URL.
+		if ( ! isset( $_GET['id'] ) ) {
+			wp_die( __( 'No batch ID has been provided.', 'sme-content-staging' ) );
+		}
+
+		// Make sure user has sent in a request to delete batch.
+		if ( ! isset( $_POST['delete'] ) || $_POST['delete'] !== 'delete' ) {
+			wp_die( __( 'Failed deleting batch.', 'sme-content-staging' ) );
+		}
+
+		// Check that the current request carries a valid nonce.
+		check_admin_referer( 'sme-delete-batch', 'sme_delete_batch_nonce' );
+
+		// Get batch ID from URL query param.
+		$batch = $this->batch_mgr->get_batch( $_GET['id'], true );
+
+		// Delete batch.
+		$this->batch_dao->delete_batch( $batch );
+
+		// Redirect user.
+		wp_redirect( admin_url( 'admin.php?page=sme-list-batches' ) );
+		exit();
 	}
 
 	/**
@@ -192,11 +282,6 @@ class Batch_Ctrl {
 	 *
 	 * Display any pre-flight messages that is returned by production.
 	 *
-	 * @todo The complete batch is prepared to be sent through a form to the
-	 * 'Deploy Batch' page. This could potentially result in problems with
-	 * the PHP 'post_max_size'. In this case a better option might be to e.g.
-	 * store data in database and send something else with the form.
-	 *
 	 * @param Batch $batch
 	 */
 	public function prepare( $batch = null ) {
@@ -223,24 +308,18 @@ class Batch_Ctrl {
 		);
 
 		$this->xmlrpc_client->query( 'smeContentStaging.verify', $request );
-		$response = $this->xmlrpc_client->get_response_data();
+		$messages = $this->xmlrpc_client->get_response_data();
 
-		// Pre-flight status.
-		$is_success = true;
-
-		// Check if pre-flight messages contains any errors.
-		foreach ( $response as $message ) {
-			if ( $message['level'] == 'error' ) {
-				$is_success = false;
-			}
+		// Add batch data to database if pre-flight was successful.
+		if ( ! $this->has_error_message( $messages ) ) {
+			$this->batch_dao->update_batch( $batch );
 		}
 
 		// Prepare data we want to pass to view.
 		$data = array(
 			'batch'      => $batch,
-			'batch_data' => base64_encode( serialize( $batch ) ),
-			'messages'   => $response,
-			'is_success' => $is_success,
+			'messages'   => $messages,
+			'is_success' => ! $this->has_error_message( $messages ),
 		);
 
 		$this->template->render( 'preflight-batch', $data );
@@ -254,13 +333,16 @@ class Batch_Ctrl {
 	 */
 	public function verify( array $args ) {
 
-		$this->xmlrpc_client->handle_request( $args );
+		if ( $messages = $this->xmlrpc_client->handle_request( $args ) ) {
+			return $messages;
+		}
+
 		$result = $this->xmlrpc_client->get_request_data();
 
 		// Check if a batch has been provided.
 		if ( ! isset( $result['batch'] ) || ! ( $result['batch'] instanceof Batch ) ) {
 			return $this->xmlrpc_client->prepare_response(
-				array( 'error' => array( 'Invalid batch!' ) )
+				array( array( 'level' => 'error', 'message' => 'Invalid batch!' ) )
 			);
 		}
 
@@ -276,24 +358,14 @@ class Batch_Ctrl {
 			if ( ! $this->parent_post_exists( $post, $batch->get_posts() ) ) {
 				$importer->add_message(
 					sprintf(
-						'Post with ID %d has a parent post that does not exist on production and is not part of this batch. Include post with ID %d in this batch to resolve this issue.',
-						$post->get_id(),
-						$post->get_post_parent()
+						'Post <a href="%s" target="_blank">%s</a> has a parent post that does not exist on production and is not part of this batch. Include post <a href="%s" target="_blank">%s</a> in this batch to resolve this issue.',
+						$batch->get_backend() . 'post.php?post=' . $post->get_id() . '&action=edit',
+						$post->get_title(),
+						$batch->get_backend() . 'post.php?post=' . $post->get_parent()->get_id() . '&action=edit',
+						$post->get_parent()->get_title()
 					),
 					'error'
 				);
-			}
-		}
-
-		foreach ( $batch->get_attachments() as $attachment ) {
-			foreach ( $attachment['sizes'] as $size ) {
-				// Check if attachment exists on content stage.
-				if ( ! $this->attachment_exists( $size) ) {
-					$importer->add_message(
-						'Attachment <a href="' . $size . '" target="_blank">' . $size . '</a> is missing on content stage and will not be deployed to production.',
-						'warning'
-					);
-				}
 			}
 		}
 
@@ -336,8 +408,7 @@ class Batch_Ctrl {
 		$batch = $this->batch_mgr->get_batch();
 
 		$batch->set_title( 'Quick Deploy ' . current_time( 'mysql' ) );
-		$batch->set_content( serialize( array( $_GET['post_id'] ) ) );
-		$this->batch_dao->insert_batch( $batch );
+		$this->batch_dao->insert( $batch );
 
 		$this->batch_dao->update_post_meta( $batch->get_id(), 'sme_selected_post_ids', array( $post_id ) );
 
@@ -363,16 +434,33 @@ class Batch_Ctrl {
 
 		// Check that the current request carries a valid nonce.
 		check_admin_referer( 'sme-deploy-batch', 'sme_deploy_batch_nonce' );
-
-		// Determine plugin path and plugin URL of this plugin.
-		$plugin_path = dirname( __FILE__ );
-		$plugin_url  = plugins_url( basename( $plugin_path ), $plugin_path );
+		$batch = null;
 
 		/*
 		 * Batch data is sent through a form on the pre-flight page and picked up
 		 * here. Decode data.
 		 */
-		$batch = unserialize( base64_decode( $_POST['batch_data'] ) );
+		if ( ! isset( $_GET['id'] )
+			 || ! ( $batch = $this->batch_dao->find( $_GET['id'] ) )
+			 || $batch->get_status() != 'publish' ) {
+			wp_die( __( 'No batch found.', 'sme-content-staging' ) );
+		}
+
+		$batch = unserialize( base64_decode( $batch->get_content() ) );
+
+		/*
+		 * Give third-party developers the option to import images before batch
+		 * is sent to production.
+		 */
+		do_action( 'sme_deploy_custom_attachment_importer', $batch->get_attachments(), $batch );
+
+		/*
+		 * Make it possible for third-party developers to alter the list of
+		 * attachments to deploy.
+		 */
+		$batch->set_attachments(
+			apply_filters( 'sme_deploy_attachments', $batch->get_attachments(), $batch )
+		);
 
 		$request = array(
 			'batch'  => $batch,
@@ -409,7 +497,7 @@ class Batch_Ctrl {
 		$result = $this->xmlrpc_client->get_request_data();
 
 		if ( isset( $result['job_id'] ) ) {
-			$job = $this->batch_import_job_dao->get_job_by_id( intval( $result['job_id'] ) );
+			$job = $this->batch_import_job_dao->find( intval( $result['job_id'] ) );
 		}
 
 		if ( ! $job ) {
@@ -455,7 +543,7 @@ class Batch_Ctrl {
 	 *
 	 * Runs on staging environment.
 	 */
-	public  function import_request() {
+	public function import_request() {
 
 		$request = array(
 			'job_id'   => intval( $_POST['job_id'] ),
@@ -465,39 +553,14 @@ class Batch_Ctrl {
 		$this->xmlrpc_client->query( 'smeContentStaging.import', $request );
 		$response = $this->xmlrpc_client->get_response_data();
 
+		if ( isset( $response['status'] ) && $response['status'] > 1 ) {
+			do_action( 'sme_deployed' );
+		}
+
 		header( 'Content-Type: application/json' );
 		echo json_encode( $response );
 
 		die(); // Required to return a proper result.
-	}
-
-	/**
-	 * Runs on production when an import status request has been received.
-	 *
-	 * @param array $result
-	 * @return Batch_Import_Job
-	 */
-	private function create_import_job( $result ) {
-
-		$job = new Batch_Import_Job();
-
-		// Check if a batch has been provided.
-		if ( ! isset( $result['batch'] ) || ! ( $result['batch'] instanceof Batch ) ) {
-			$job->add_message( 'Failed creating import job.', 'error' );
-			$job->set_status( 2 );
-			return $job;
-		}
-
-		$job->set_batch( $result['batch'] );
-		$this->batch_import_job_dao->insert_job( $job );
-		$job->add_message(
-			sprintf(
-				'Created import job ID: <span id="sme-batch-import-job-id">%s</span>',
-				$job->get_id()
-			),
-			'info'
-		);
-		return $job;
 	}
 
 	/**
@@ -528,7 +591,7 @@ class Batch_Ctrl {
 
 		// Create new batch if needed.
 		if ( ! $batch->get_id() ) {
-			$this->batch_dao->insert_batch( $batch );
+			$this->batch_dao->insert( $batch );
 		}
 
 		// Get IDs of posts already included in the batch.
@@ -560,79 +623,6 @@ class Batch_Ctrl {
 	}
 
 	/**
-	 * Save batch data user has submitted through form.
-	 */
-	public function save_batch() {
-
-		$batch_id = null;
-
-		// Check that the current request carries a valid nonce.
-		check_admin_referer( 'sme-save-batch', 'sme_save_batch_nonce' );
-
-		// Make sure post data has been provided.
-		if ( ! isset( $_POST['submit'] ) ) {
-			wp_die( __( 'No data been provided.', 'sme-content-staging' ) );
-		}
-
-		// Make sure a query param ID exists in current URL.
-		if ( ! isset( $_GET['id'] ) ) {
-			wp_die( __( 'No batch ID has been provided.', 'sme-content-staging' ) );
-		}
-
-		// Get batch ID from URL query param.
-		if ( $_GET['id'] > 0 ) {
-			$batch_id = intval( $_GET['id'] );
-		}
-
-		// Get batch.
-		$batch = $this->batch_mgr->get_batch( $batch_id, true );
-
-		// Handle input data.
-		$this->handle_edit_batch_form_data( $batch, $_POST );
-
-		// Default redirect URL on successful batch update.
-		$redirect_url = admin_url( 'admin.php?page=sme-edit-batch&id=' . $batch->get_id() . '&updated' );
-
-		// Set different redirect URL if user has requested a pre-flight.
-		if ( $_POST['submit'] === 'Pre-Flight Batch' ) {
-			$redirect_url = admin_url( 'admin.php?page=sme-preflight-batch&id=' . $batch->get_id() );
-		}
-
-		// Redirect user.
-		wp_redirect( $redirect_url );
-		exit();
-	}
-
-	/**
-	 * Delete a batch.
-	 */
-	public function delete_batch() {
-
-		// Make sure a query param ID exists in current URL.
-		if ( ! isset( $_GET['id'] ) ) {
-			wp_die( __( 'No batch ID has been provided.', 'sme-content-staging' ) );
-		}
-
-		// Make sure user has sent in a request to delete batch.
-		if ( ! isset( $_POST['delete'] ) || $_POST['delete'] !== 'delete' ) {
-			wp_die( __( 'Failed deleting batch.', 'sme-content-staging' ) );
-		}
-
-		// Check that the current request carries a valid nonce.
-		check_admin_referer( 'sme-delete-batch', 'sme_delete_batch_nonce' );
-
-		// Get batch ID from URL query param.
-		$batch = $this->batch_mgr->get_batch( $_GET['id'], true );
-
-		// Delete batch.
-		$this->batch_dao->delete_batch( $batch );
-
-		// Redirect user.
-		wp_redirect( admin_url( 'admin.php?page=sme-list-batches' ) );
-		exit();
-	}
-
-	/**
 	 * Create/update a batch based on input data submitted by user from the
 	 * Edit Batch page.
 	 *
@@ -645,15 +635,18 @@ class Batch_Ctrl {
 	private function handle_edit_batch_form_data( Batch $batch, $request_data ) {
 
 		// Check if a title has been set.
-		if ( isset( $request_data['batch_title'] ) ) {
+		if ( isset( $request_data['batch_title'] ) && $request_data['batch_title'] ) {
 			$batch->set_title( $request_data['batch_title'] );
+		} else {
+			$batch->set_title( 'Batch ' . date( 'Y-m-d H:i:s' ) );
 		}
 
 		if ( $batch->get_id() <= 0 ) {
 			// Create new batch.
-			$this->batch_dao->insert_batch( $batch );
+			$this->batch_dao->insert( $batch );
 		} else {
 			// Update existing batch.
+			$batch->set_status( 'publish' );
 			$this->batch_dao->update_batch( $batch );
 		}
 
@@ -662,7 +655,7 @@ class Batch_Ctrl {
 
 		// Check if any posts to include in batch has been selected.
 		if ( isset( $request_data['post_ids'] ) && $request_data['post_ids'] ) {
-			$post_ids = explode( ',', $request_data['post_ids'] );
+			$post_ids = array_map( 'intval', explode( ',', $request_data['post_ids'] ) );
 		}
 
 		// Update batch meta with IDs of posts user selected to include in batch.
@@ -670,30 +663,73 @@ class Batch_Ctrl {
 	}
 
 	/**
-	 * Sort array of posts so posts of post type 'page' comes first followed
-	 * by post type 'post' and then remaining post types are sorted by
-	 * post type alphabetical.
+	 * Checks running on content stage before a batch is sent to production
+	 * for verification.
 	 *
-	 * @param array $posts
+	 * @param Batch $batch
 	 * @return array
 	 */
-	private function sort_posts( array $posts ) {
+	private function prepare_checks( Batch $batch ) {
+		$messages = array();
 
-		$pages = array();
-		$blog_posts = array();
-		$others = array();
-
-		foreach ( $posts as $post ) {
-			if ( $post->get_post_type() == 'page' ) {
-				$pages[] = $post;
-			} else if ( $post->get_post_type() == 'post' ) {
-				$blog_posts[] = $post;
-			} else {
-				$others[] = $post;
+		foreach ( $batch->get_attachments() as $attachment ) {
+			foreach ( $attachment['items'] as $item ) {
+				$url = $attachment['url'] . '/' . $item;
+				// Check if attachment exists on content stage.
+				if ( ! $this->attachment_exists( $url ) ) {
+					$messages[] = array(
+						'level'   => 'warning',
+						'message' => 'Attachment <a href="' . $url . '" target="_blank">' . $url . '</a> is missing on content stage and will not be deployed to production.',
+					);
+				}
 			}
 		}
 
-		return array_merge( $pages, $blog_posts, $others );
+		return $messages;
+	}
+
+	/**
+	 * Check if array of messages contains any error messages.
+	 *
+	 * @param array $messages
+	 * @return bool
+	 */
+	private function has_error_message( array $messages ) {
+		foreach ( $messages as $message ) {
+			if ( $message['level'] == 'error' ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Runs on production when an import status request has been received.
+	 *
+	 * @param array $result
+	 * @return Batch_Import_Job
+	 */
+	private function create_import_job( $result ) {
+
+		$job = new Batch_Import_Job();
+
+		// Check if a batch has been provided.
+		if ( ! isset( $result['batch'] ) || ! ( $result['batch'] instanceof Batch ) ) {
+			$job->add_message( 'Failed creating import job.', 'error' );
+			$job->set_status( 2 );
+			return $job;
+		}
+
+		$job->set_batch( $result['batch'] );
+		$this->batch_import_job_dao->insert( $job );
+		$job->add_message(
+			sprintf(
+				'Created import job ID: <span id="sme-batch-import-job-id">%s</span>',
+				$job->get_id()
+			),
+			'info'
+		);
+		return $job;
 	}
 
 	/**
@@ -708,18 +744,18 @@ class Batch_Ctrl {
 	private function parent_post_exists( $post, $posts ) {
 
 		// Check if the post has a parent post.
-		if ( $post->get_post_parent() <= 0 ) {
+		if ( $post->get_parent() === null ) {
 			return true;
 		}
 
 		// Check if parent post exist on production server.
-		if ( $this->post_dao->get_post_by_guid( $post->get_post_parent_guid() ) ) {
+		if ( $this->post_dao->get_by_guid( $post->get_parent()->get_guid() ) ) {
 			return true;
 		}
 
 		// Parent post is not on production, look in this batch for parent post.
 		foreach ( $posts as $item ) {
-			if ( $item->get_id() == $post->get_post_parent() ) {
+			if ( $item->get_id() == $post->get_parent()->get_id() ) {
 				return true;
 			}
 		}
@@ -728,7 +764,7 @@ class Batch_Ctrl {
 	}
 
 	/**
-	 * Check if an attachment exists on remote server.
+	 * Check if an attachment exists.
 	 *
 	 * @param string $attachment
 	 * @return bool
@@ -746,4 +782,5 @@ class Batch_Ctrl {
 
 		return false;
 	}
+
 }
