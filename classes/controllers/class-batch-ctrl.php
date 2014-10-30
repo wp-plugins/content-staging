@@ -3,6 +3,7 @@ namespace Me\Stenberg\Content\Staging\Controllers;
 
 use Me\Stenberg\Content\Staging\DB\Batch_DAO;
 use Me\Stenberg\Content\Staging\DB\Batch_Import_Job_DAO;
+use Me\Stenberg\Content\Staging\Helper_Factory;
 use Me\Stenberg\Content\Staging\Importers\Batch_Importer_Factory;
 use Me\Stenberg\Content\Staging\Managers\Batch_Mgr;
 use Me\Stenberg\Content\Staging\Models\Batch;
@@ -23,16 +24,14 @@ class Batch_Ctrl {
 	private $batch_dao;
 	private $post_dao;
 
-	public function __construct( Template $template, Batch_Mgr $batch_mgr, Client $xmlrpc_client,
-								 Batch_Importer_Factory $importer_factory, Batch_Import_Job_DAO $batch_import_job_dao,
-								 Batch_DAO $batch_dao, Post_DAO $post_dao ) {
+	public function __construct( Template $template, Client $xmlrpc_client, Batch_Importer_Factory $importer_factory ) {
 		$this->template             = $template;
-		$this->batch_mgr            = $batch_mgr;
+		$this->batch_mgr            = new Batch_Mgr();
 		$this->xmlrpc_client        = $xmlrpc_client;
 		$this->importer_factory     = $importer_factory;
-		$this->batch_import_job_dao = $batch_import_job_dao;
-		$this->batch_dao            = $batch_dao;
-		$this->post_dao             = $post_dao;
+		$this->batch_import_job_dao = Helper_Factory::get_instance()->get_dao( 'Batch_Import_Job' );
+		$this->batch_dao            = Helper_Factory::get_instance()->get_dao( 'Batch' );
+		$this->post_dao             = Helper_Factory::get_instance()->get_dao( 'Post' );
 	}
 
 	/**
@@ -61,16 +60,17 @@ class Batch_Ctrl {
 			$paged = $_GET['paged'];
 		}
 
-		$total_batches = $this->batch_dao->get_published_content_batches_count();
-		$batches       = $this->batch_dao->get_published_content_batches( $order_by, $order, $per_page, $paged );
+		$status  = apply_filters( 'sme_batch_list_statuses', array( 'publish' ) );
+		$count   = $this->batch_dao->count( $status );
+		$batches = $this->batch_dao->get_batches( $status, $order_by, $order, $per_page, $paged );
 
 		// Prepare table of batches.
 		$table        = new Batch_Table();
 		$table->items = $batches;
-
+		$table->set_bulk_actions( array( 'delete' => 'Delete' ) );
 		$table->set_pagination_args(
 			array(
-				'total_items' => $total_batches,
+				'total_items' => $count,
 				'per_page'    => $per_page,
 			)
 		);
@@ -281,11 +281,6 @@ class Batch_Ctrl {
 	 * trouble when user later on deploys the batch.
 	 *
 	 * Display any pre-flight messages that is returned by production.
-	 *
-	 * @todo The complete batch is prepared to be sent through a form to the
-	 * 'Deploy Batch' page. This could potentially result in problems with
-	 * the PHP 'post_max_size'. In this case a better option might be to e.g.
-	 * store data in database and send something else with the form.
 	 *
 	 * @param Batch $batch
 	 */
@@ -558,6 +553,10 @@ class Batch_Ctrl {
 		$this->xmlrpc_client->query( 'smeContentStaging.import', $request );
 		$response = $this->xmlrpc_client->get_response_data();
 
+		if ( isset( $response['status'] ) && $response['status'] > 1 ) {
+			do_action( 'sme_deployed' );
+		}
+
 		header( 'Content-Type: application/json' );
 		echo json_encode( $response );
 
@@ -647,6 +646,7 @@ class Batch_Ctrl {
 			$this->batch_dao->insert( $batch );
 		} else {
 			// Update existing batch.
+			$batch->set_status( 'publish' );
 			$this->batch_dao->update_batch( $batch );
 		}
 

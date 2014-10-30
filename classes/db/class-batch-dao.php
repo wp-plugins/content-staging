@@ -1,6 +1,7 @@
 <?php
 namespace Me\Stenberg\Content\Staging\DB;
 
+use Me\Stenberg\Content\Staging\Helper_Factory;
 use Me\Stenberg\Content\Staging\Models\Batch;
 use Me\Stenberg\Content\Staging\Models\Model;
 
@@ -9,23 +10,26 @@ class Batch_DAO extends DAO {
 	private $table;
 	private $user_dao;
 
-	public function __construct( $wpdb, User_DAO $user_dao ) {
+	public function __construct( $wpdb ) {
 		parent::__constuct( $wpdb );
 		$this->table    = $wpdb->posts;
-		$this->user_dao = $user_dao;
+		$this->user_dao = Helper_Factory::get_instance()->get_dao( 'User' );
 	}
 
 	/**
 	 * Get published content batches.
 	 *
+	 * @param array $statuses
 	 * @param string $order_by
 	 * @param string $order
 	 * @param int $per_page
 	 * @param int $paged
 	 * @return array
 	 */
-	public function get_published_content_batches( $order_by = null, $order = 'asc', $per_page = 5, $paged = 1 ) {
+	public function get_batches( $statuses = array(), $order_by = null, $order = 'asc', $per_page = 5, $paged = 1 ) {
 		$batches = array();
+		$values  = array();
+		$where   = '';
 
 		// Only allow to order the query result by the following fields.
 		$allowed_order_by_values = array( 'post_title', 'post_modified', 'post_author' );
@@ -40,8 +44,9 @@ class Batch_DAO extends DAO {
 			$order = 'desc';
 		}
 
-		$stmt   = 'SELECT * FROM ' . $this->wpdb->posts . ' WHERE post_type = "sme_content_batch" AND post_status = "publish"';
-		$values = array();
+		$where = $this->where_statuses( $where, $statuses, $values );
+
+		$stmt = 'SELECT * FROM ' . $this->wpdb->posts . ' WHERE post_type = "sme_content_batch"' . $where;
 
 		if ( ! empty( $order_by ) && ! empty( $order ) ) {
 			$stmt .= ' ORDER BY ' . $order_by . ' ' . $order;
@@ -73,10 +78,17 @@ class Batch_DAO extends DAO {
 	/**
 	 * Get number of published content batches that exists.
 	 *
+	 * @param array $statuses
 	 * @return int
 	 */
-	public function get_published_content_batches_count() {
-		return $this->wpdb->get_var( 'SELECT COUNT(*) FROM ' . $this->wpdb->posts . ' WHERE post_type = "sme_content_batch" AND post_status = "publish"' );
+	public function count( $statuses = array() ) {
+		$values = array( 'sme_content_batch' );
+		$where  = $this->where_statuses( '', $statuses, $values );
+		$query  = $this->wpdb->prepare(
+			'SELECT COUNT(*) FROM ' . $this->wpdb->posts . ' WHERE post_type = %s' . $where,
+			$values
+		);
+		return $this->wpdb->get_var( $query );
 	}
 
 	/**
@@ -277,6 +289,27 @@ class Batch_DAO extends DAO {
 	 */
 	private function post_author_sort( Batch $a, Batch $b ) {
 		return $a->get_creator()->get_display_name() == $b->get_creator()->get_display_name() ? 0 : ( $a->get_creator()->get_display_name() > $b->get_creator()->get_display_name() ) ? 1 : -1;
+	}
+
+	/**
+	 * Generate where part of SQL query for selecting batches with a
+	 * post_status included in the $statuses array.
+	 *
+	 * @param string $where
+	 * @param array $statuses
+	 * @param array $values
+	 * @return string
+	 */
+	private function where_statuses( $where = '', array $statuses, array &$values ) {
+		if ( ! empty( $statuses ) ) {
+			for ( $i = 0; $i < count( $statuses ); $i++ ) {
+				$where .= ( $i == 0 ) ? ' AND (' : ' OR ';
+				$where .= 'post_status = %s';
+				$values[] = $statuses[$i];
+			}
+			$where .= ')';
+		}
+		return $where;
 	}
 
 }
