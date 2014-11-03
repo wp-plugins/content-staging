@@ -300,26 +300,37 @@ class Batch_Ctrl {
 		$batch->set_attachments( apply_filters( 'sme_prepare_attachments', $batch->get_attachments() ) );
 		$batch->set_users( apply_filters( 'sme_prepare_users', $batch->get_users() ) );
 
-		// Let third-party developers add custom data to batch.
-		do_action( 'sme_prepare_custom_data', $batch );
+		$job = new Batch_Import_Job();
+		$job->set_batch( $batch );
 
-		$request = array(
-			'batch'  => $batch,
-		);
+		/*
+		 * Let third party developers perform actions before pre-flight. This is
+		 * most often when users would add custom data.
+		 */
+		do_action( 'sme_prepare', $job );
 
-		$this->xmlrpc_client->query( 'smeContentStaging.verify', $request );
-		$messages = $this->xmlrpc_client->get_response_data();
+		// Send batch to production for verification.
+		if ( $job->get_status() !== 2 ) {
+			$this->send_verification_request( $job );
+		}
+
+		/*
+		 * Let third party developers perform actions after pre-flight has
+		 * completed.
+		 */
+		do_action( 'sme_prepared', $job->get_batch() );
 
 		// Add batch data to database if pre-flight was successful.
-		if ( ! $this->has_error_message( $messages ) ) {
-			$this->batch_dao->update_batch( $batch );
+		if ( $job->get_status() !== 2 ) {
+			$this->batch_dao->update_batch( $job->get_batch() );
+			$job->add_message( 'Pre-flight successful!', 'success' );
 		}
 
 		// Prepare data we want to pass to view.
 		$data = array(
-			'batch'      => $batch,
-			'messages'   => $messages,
-			'is_success' => ! $this->has_error_message( $messages ),
+			'batch'      => $job->get_batch(),
+			'messages'   => $job->get_messages(),
+			'is_success' => ( $job->get_status() !== 2 ),
 		);
 
 		$this->template->render( 'preflight-batch', $data );
@@ -350,13 +361,19 @@ class Batch_Ctrl {
 		$batch = $result['batch'];
 
 		// Create importer.
-		$importer = new Batch_Import_Job();
-		$importer->set_batch( $batch );
+		$job = new Batch_Import_Job();
+		$job->set_batch( $batch );
+
+		/*
+		 * Let third party developers perform actions before any pre-flight
+		 * checks are done.
+		 */
+		do_action( 'sme_verify', $job );
 
 		foreach ( $batch->get_posts() as $post ) {
 			// Check if parent post exist on production or in batch.
 			if ( ! $this->parent_post_exists( $post, $batch->get_posts() ) ) {
-				$importer->add_message(
+				$job->add_message(
 					sprintf(
 						'Post <a href="%s" target="_blank">%s</a> has a parent post that does not exist on production and is not part of this batch. Include post <a href="%s" target="_blank">%s</a> in this batch to resolve this issue.',
 						$batch->get_backend() . 'post.php?post=' . $post->get_id() . '&action=edit',
@@ -370,26 +387,18 @@ class Batch_Ctrl {
 		}
 
 		// Pre-flight custom data.
-		foreach ( $importer->get_batch()->get_custom_data() as $addon => $data ) {
-			do_action( 'sme_verify_' . $addon, $data, $importer );
+		foreach ( $job->get_batch()->get_custom_data() as $addon => $data ) {
+			do_action( 'sme_verify_' . $addon, $data, $job );
 		}
 
-		// Check if pre-flight was successful.
-		$is_success = true;
-
-		foreach ( $importer->get_messages() as $message ) {
-			if ( $message['level'] == 'error' ) {
-				$is_success = false;
-				break;
-			}
-		}
-
-		if ( $is_success ) {
-			$importer->add_message( 'Pre-flight successful!', 'success' );
-		}
+		/*
+		 * Let third party developers perform actions before pre-flight data is
+		 * returned from production to content stage.
+		 */
+		do_action( 'sme_verified', $job );
 
 		// Prepare and return the XML-RPC response data.
-		return $this->xmlrpc_client->prepare_response( $importer->get_messages() );
+		return $this->xmlrpc_client->prepare_response( $job->get_messages() );
 	}
 
 	/**
@@ -663,6 +672,29 @@ class Batch_Ctrl {
 	}
 
 	/**
+	 * Send a batch to production for verification. Batch is checked for
+	 * potential issues on production and messages that can be displayed to
+	 * the user is returned to content stage.
+	 *
+	 * @param Batch_Import_Job $job
+	 */
+	private function send_verification_request( Batch_Import_Job $job ) {
+		$request = array(
+			'batch' => $job->get_batch(),
+		);
+
+		$this->xmlrpc_client->query( 'smeContentStaging.verify', $request );
+		$messages = $this->xmlrpc_client->get_response_data();
+
+		foreach ( $messages as $message ) {
+			if ( $message['level'] == 'error' ) {
+				$job->set_status( 2 );
+			}
+			$job->add_message( $message['message'], $message['level'] );
+		}
+	}
+
+	/**
 	 * Checks running on content stage before a batch is sent to production
 	 * for verification.
 	 *
@@ -686,21 +718,6 @@ class Batch_Ctrl {
 		}
 
 		return $messages;
-	}
-
-	/**
-	 * Check if array of messages contains any error messages.
-	 *
-	 * @param array $messages
-	 * @return bool
-	 */
-	private function has_error_message( array $messages ) {
-		foreach ( $messages as $message ) {
-			if ( $message['level'] == 'error' ) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/**

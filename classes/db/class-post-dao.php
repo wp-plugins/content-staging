@@ -20,12 +20,12 @@ class Post_DAO extends DAO {
 	 * @return Post
 	 */
 	public function get_by_guid( $guid ) {
-		$guid = $this->normalize_guid( $guid );
+		$guid = $this->guid_regex( $guid );
 
 		// Select post with a specific GUID ending.
 		$query = $this->wpdb->prepare(
-			'SELECT * FROM ' . $this->wpdb->posts . ' WHERE guid LIKE %s',
-			'%' . $guid
+			'SELECT * FROM ' . $this->wpdb->posts . ' WHERE guid REGEXP %s',
+			$guid
 		);
 
 		$result = $this->wpdb->get_row( $query, ARRAY_A );
@@ -47,9 +47,10 @@ class Post_DAO extends DAO {
 	 * @param Post $post
 	 */
 	public function get_id_by_guid( Post $post ) {
+		$guid = $this->guid_regex( $post->get_guid() );
 		$query = $this->wpdb->prepare(
-			'SELECT ID FROM ' . $this->wpdb->posts . ' WHERE guid = %s',
-			$post->get_guid()
+			'SELECT ID FROM ' . $this->wpdb->posts . ' WHERE guid REGEXP %s',
+			$guid
 		);
 
 		$post->set_id( $this->wpdb->get_var( $query ) );
