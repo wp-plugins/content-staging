@@ -3,9 +3,12 @@ namespace Me\Stenberg\Content\Staging\Importers;
 
 use Me\Stenberg\Content\Staging\DB\Batch_Import_Job_DAO;
 use Me\Stenberg\Content\Staging\DB\Post_DAO;
+use Me\Stenberg\Content\Staging\DB\Post_Taxonomy_DAO;
 use Me\Stenberg\Content\Staging\DB\Postmeta_DAO;
+use Me\Stenberg\Content\Staging\DB\Taxonomy_DAO;
 use Me\Stenberg\Content\Staging\DB\Term_DAO;
 use Me\Stenberg\Content\Staging\DB\User_DAO;
+use Me\Stenberg\Content\Staging\Helper_Factory;
 use Me\Stenberg\Content\Staging\Models\Batch_Import_Job;
 use Me\Stenberg\Content\Staging\Models\Post;
 use Me\Stenberg\Content\Staging\Models\Relationships\Post_Taxonomy;
@@ -26,13 +29,6 @@ abstract class Batch_Importer {
 	protected $job;
 
 	/**
-	 * Array of postmeta keys that contain relationships between posts.
-	 *
-	 * @var array
-	 */
-	protected $postmeta_keys;
-
-	/**
 	 * Array storing the relation between a post and its parent post.
 	 *
 	 * Key = Post ID.
@@ -41,17 +37,6 @@ abstract class Batch_Importer {
 	 * @var array
 	 */
 	protected $parent_post_relations;
-
-	/**
-	 * Array to keep track on the relation between a users ID on
-	 * content stage and its ID on production:
-	 *
-	 * Key = Content stage user ID.
-	 * Value = Production user ID.
-	 *
-	 * @var array
-	 */
-	protected $user_relations;
 
 	/**
 	 * Array to keep track on the relation between a posts ID on
@@ -83,9 +68,19 @@ abstract class Batch_Importer {
 	private $post_dao;
 
 	/**
+	 * @var Post_Taxonomy_DAO
+	 */
+	private $post_taxonomy_dao;
+
+	/**
 	 * @var Postmeta_DAO
 	 */
 	private $postmeta_dao;
+
+	/**
+	 * @var Taxonomy_DAO
+	 */
+	private $taxonomy_dao;
 
 	/**
 	 * @var Term_DAO
@@ -102,25 +97,18 @@ abstract class Batch_Importer {
 	 *
 	 * @param string $type
 	 * @param Batch_Import_Job $job
-	 * @param Batch_Import_Job_DAO $import_job_dao
-	 * @param Post_DAO $post_dao
-	 * @param Postmeta_DAO $postmeta_dao
-	 * @param Term_DAO $term_dao
-	 * @param User_DAO $user_dao
 	 */
-	protected function __construct( $type, Batch_Import_Job $job, Batch_Import_Job_DAO $import_job_dao,
-									Post_DAO $post_dao, Postmeta_DAO $postmeta_dao, Term_DAO $term_dao,
-									User_DAO $user_dao ) {
+	protected function __construct( $type, Batch_Import_Job $job ) {
 		$this->type                  = $type;
 		$this->job                   = $job;
-		$this->import_job_dao        = $import_job_dao;
-		$this->post_dao              = $post_dao;
-		$this->postmeta_dao          = $postmeta_dao;
-		$this->term_dao              = $term_dao;
-		$this->user_dao              = $user_dao;
-		$this->postmeta_keys         = array();
+		$this->import_job_dao        = Helper_Factory::get_instance()->get_dao( 'Batch_Import_Job' );
+		$this->post_dao              = Helper_Factory::get_instance()->get_dao( 'Post' );
+		$this->post_taxonomy_dao     = Helper_Factory::get_instance()->get_dao( 'Post_Taxonomy' );
+		$this->postmeta_dao          = Helper_Factory::get_instance()->get_dao( 'Postmeta' );
+		$this->taxonomy_dao          = Helper_Factory::get_instance()->get_dao( 'Taxonomy' );
+		$this->term_dao              = Helper_Factory::get_instance()->get_dao( 'Term' );
+		$this->user_dao              = Helper_Factory::get_instance()->get_dao( 'User' );
 		$this->parent_post_relations = array();
-		$this->user_relations        = array();
 		$this->post_relations        = array();
 		$this->posts_to_publish      = array();
 	}
@@ -166,40 +154,23 @@ abstract class Batch_Importer {
 	 * Import user.
 	 *
 	 * @param User $user
+	 *
+	 * @todo Here we are assuming that there cannot be two users with the
+	 * same user_login. This might be wrong. Investigate!
+	 * Consider using WP function get_user_by.
+	 *
+	 * @see http://codex.wordpress.org/Function_Reference/get_user_by
 	 */
 	protected function import_user( User $user ) {
-		/*
-			 * See if user exists in database.
-			 *
-			 * @todo Here we are assuming that there cannot be two users with the
-			 * same user_login. This might be wrong. Investigate!
-			 * Consider using WP function get_user_by.
-			 *
-			 * @see http://codex.wordpress.org/Function_Reference/get_user_by
-			 */
-		$existing = $this->user_dao->get_user_by_user_login( $user->get_user_login() );
+		// See if user exists in database.
+		$existing = $this->user_dao->get_user_by_user_login( $user->get_login() );
 
 		// Create if user does not exist, update otherwise.
 		if ( empty( $existing ) ) {
-			$stage_user_id = $user->get_id();
-			$prod_user_id  = $this->user_dao->insert_user( $user );
-
-			$user->set_id( $prod_user_id );
+			$this->user_dao->insert( $user );
 		} else {
-			$stage_user_id = $user->get_id();
-			$prod_user_id  = $existing->get_id();
-
-			$user->set_id( $prod_user_id );
-			$this->user_dao->update_user( $user, array( 'ID' => $user->get_id() ), array( '%d' ) );
-			$this->user_dao->delete_usermeta( array( 'user_id' => $prod_user_id ), array( '%d' ) );
-		}
-
-		// Add to the user_relations property
-		$this->user_relations[$stage_user_id] = $prod_user_id;
-
-		foreach ( $user->get_meta() as $meta ) {
-			$meta['user_id'] = $user->get_id();
-			$this->user_dao->insert_usermeta( $meta );
+			$user->set_id( $existing->get_id() );
+			$this->user_dao->update_user( $user );
 		}
 	}
 
@@ -213,7 +184,7 @@ abstract class Batch_Importer {
 		// Post ID on content staging environment.
 		$stage_post_id = $post->get_id();
 
-		// Taxonomy ID on production environment.
+		// Post ID on production environment.
 		$this->post_dao->get_id_by_guid( $post );
 
 		/*
@@ -235,7 +206,7 @@ abstract class Batch_Importer {
 			}
 
 			// This post does not exist on production, create it.
-			$this->post_dao->insert_post( $post );
+			$this->post_dao->insert( $post );
 
 			/*
 			 * Store ID of post so we can publish it when data has been completely
@@ -252,17 +223,33 @@ abstract class Batch_Importer {
 		$this->post_relations[$stage_post_id] = $post->get_id();
 
 		// Store relation between a post and its parent post.
-		if ( $post->get_post_parent_guid() ) {
-			$this->parent_post_relations[$post->get_id()] = $post->get_post_parent_guid();
+		if ( $post->get_parent() !== null ) {
+			$this->parent_post_relations[$post->get_id()] = $post->get_parent()->get_guid();
 		}
 
 		// Store relation between post ID on content stage and ID on production.
 		$this->post_relations[$stage_post_id] = $post->get_id();
 
+		// Get rid of old taxonomy relationships this post might have.
+		$this->post_taxonomy_dao->delete(
+			array( 'object_id' => $post->get_id() ),
+			array( '%d' )
+		);
+
 		// Import post/taxonomy relationships.
 		foreach ( $post->get_post_taxonomy_relationships() as $post_taxonomy ) {
 			$this->import_post_taxonomy_relationship( $post_taxonomy );
 		}
+
+		$this->job->add_message(
+			sprintf(
+				'Post <strong>%s</strong> has been successfully imported.',
+				$post->get_title()
+			),
+			'success'
+		);
+
+		$this->import_job_dao->update_job( $this->job );
 	}
 
 	/**
@@ -295,7 +282,7 @@ abstract class Batch_Importer {
 		$meta = $post->get_meta();
 
 		for ( $i = 0; $i < count($meta); $i++ ) {
-			if ( in_array( $meta[$i]['meta_key'], $this->postmeta_keys ) ) {
+			if ( in_array( $meta[$i]['meta_key'], $this->job->get_batch()->get_post_rel_keys() ) ) {
 
 				/*
 				 * The meta value must be an integer pointing at the ID of the post
@@ -320,21 +307,21 @@ abstract class Batch_Importer {
 	 */
 	protected function import_attachments() {
 
-		$attachments = $this->job->get_batch()->get_attachments();
-
 		/*
 		 * Make it possible for third-party developers to inject their custom
 		 * attachment import functionality.
 		 */
-		do_action( 'sme_import_attachments', $attachments, $this->job );
+		do_action( 'sme_import_custom_attachment_importer', $this->job->get_batch()->get_attachments(), $this->job );
 
 		/*
 		 * Make it possible for third-party developers to alter the list of
 		 * attachments to import.
 		 */
-		$attachments = apply_filters( 'sme_import_attachments', $attachments, $this->job );
+		$this->job->get_batch()->set_attachments(
+			apply_filters( 'sme_import_attachments', $this->job->get_batch()->get_attachments(), $this->job )
+		);
 
-		foreach ( $attachments as $attachment ) {
+		foreach ( $this->job->get_batch()->get_attachments() as $attachment ) {
 			$this->import_attachment( $attachment );
 		}
 	}
@@ -347,8 +334,7 @@ abstract class Batch_Importer {
 	 */
 	protected function import_attachment( array $attachment ) {
 		$upload_dir = wp_upload_dir();
-		$path       = $attachment['path'];
-		$filepath   = $upload_dir['basedir'] . '/' . $path . '/';
+		$filepath   = $upload_dir['basedir'] . $attachment['subdir'] . '/';
 
 		if ( ! is_dir( $filepath ) && ! wp_mkdir_p( $filepath ) ) {
 			/*
@@ -358,10 +344,10 @@ abstract class Batch_Importer {
 
 			$failed_attachment = '';
 
-			if ( isset( $attachment['sizes'][0] ) ) {
+			if ( isset( $attachment['items'][0] ) ) {
 				$failed_attachment = sprintf(
 					' Attachment %s and generated sizes could not be deployed to production. This is most likely a file permission error, make sure your web server can write to the image upload directory.',
-					pathinfo( $attachment['sizes'][0], PATHINFO_BASENAME )
+					$attachment['items'][0]
 				);
 			}
 
@@ -378,12 +364,10 @@ abstract class Batch_Importer {
 			return false;
 		}
 
-		foreach ( $attachment['sizes'] as $size ) {
-			$basename = pathinfo( $size, PATHINFO_BASENAME );
-
+		foreach ( $attachment['items'] as $item ) {
 			// Get file if it exists.
-			if ( $image = file_get_contents( $size ) ) {
-				file_put_contents( $filepath . $basename, $image );
+			if ( $image = file_get_contents( $attachment['url'] . '/' . $item ) ) {
+				file_put_contents( $filepath . $item, $image );
 			}
 		}
 
@@ -404,7 +388,7 @@ abstract class Batch_Importer {
 		 * Check if a relationship between a post and a taxonomy exists on
 		 * production.
 		 */
-		$has_relationship = $this->term_dao->has_post_taxonomy_relationship( $post_taxonomy );
+		$has_relationship = $this->post_taxonomy_dao->has_post_taxonomy_relationship( $post_taxonomy );
 
 		// Check if this is a new term-taxonomy.
 		if ( ! $has_relationship ) {
@@ -412,10 +396,10 @@ abstract class Batch_Importer {
 			 * This post/taxonomy relationship does not exist on production,
 			 * create it.
 			 */
-			$this->term_dao->insert_post_taxonomy_relationship( $post_taxonomy );
+			$this->post_taxonomy_dao->insert( $post_taxonomy );
 		} else {
 			// This post/taxonomy relationship exists on production, update it.
-			$this->term_dao->update_post_taxonomy_relationship( $post_taxonomy );
+			$this->post_taxonomy_dao->update_post_taxonomy( $post_taxonomy );
 		}
 	}
 
@@ -429,19 +413,19 @@ abstract class Batch_Importer {
 		$this->import_term( $taxonomy->get_term() );
 
 		// If a parent taxonomy exists, import it.
-		if ( $taxonomy->get_parent() instanceof Taxonomy ) {
+		if ( $taxonomy->get_parent() !== null ) {
 			$this->import_taxonomy( $taxonomy->get_parent() );
 		}
 
 		// Taxonomy ID on production environment.
-		$this->term_dao->get_taxonomy_id_by_taxonomy( $taxonomy );
+		$this->taxonomy_dao->get_taxonomy_id_by_taxonomy( $taxonomy );
 
 		if ( ! $taxonomy->get_id() ) {
 			// This taxonomy does not exist on production, create it.
-			$this->term_dao->insert_taxonomy( $taxonomy );
+			$this->taxonomy_dao->insert( $taxonomy );
 		} else {
 			// This taxonomy exists on production, update it.
-			$this->term_dao->update_taxonomy( $taxonomy );
+			$this->taxonomy_dao->update_taxonomy( $taxonomy );
 		}
 	}
 
@@ -451,16 +435,12 @@ abstract class Batch_Importer {
 	 * @param Term $term
 	 */
 	protected function import_term( Term $term ) {
-
-		// Term ID on content staging environment.
-		$stage_term_id = $term->get_id();
-
 		// Term ID on production environment.
 		$this->term_dao->get_term_id_by_slug( $term );
 
 		if ( ! $term->get_id() ) {
 			// This term does not exist on production, create it.
-			$this->term_dao->insert_term( $term );
+			$this->term_dao->insert( $term );
 		} else {
 			// This term exists on production, update it.
 			$this->term_dao->update_term( $term );
@@ -483,9 +463,8 @@ abstract class Batch_Importer {
 	 */
 	protected function update_parent_post_relations() {
 		foreach ( $this->parent_post_relations as $post_id => $parent_guid ) {
-			$parent = $this->post_dao->get_post_by_guid( $parent_guid );
+			$parent = $this->post_dao->get_by_guid( $parent_guid );
 			$this->post_dao->update(
-				'posts',
 				array( 'post_parent' => $parent->get_id() ),
 				array( 'ID' => $post_id ),
 				array( '%d' ),
@@ -505,12 +484,36 @@ abstract class Batch_Importer {
 	protected function publish_posts() {
 		foreach ( $this->posts_to_publish as $post_id ) {
 			$this->post_dao->update(
-				'posts',
 				array( 'post_status' => 'publish' ),
 				array( 'ID' => $post_id ),
 				array( '%s' ),
 				array( '%d' )
 			);
 		}
+	}
+
+	protected function tear_down() {
+		$links  = array();
+		$output = '';
+
+		foreach ( $this->job->get_batch()->get_posts() as $post ) {
+			$links[] = array(
+				'link' => get_permalink( $post->get_id() ),
+				'post' => $post,
+			);
+		}
+
+		$links = apply_filters( 'sme_imported_post_links', $links );
+
+		foreach ( $links as $link ) {
+			$output .= '<li><a href="' . $link['link'] . '" target="_blank">' . $link['post']->get_title() . '</a></li>';
+		}
+
+		if ( $output !== '' ) {
+			$output = '<ul>' . $output . '</ul>';
+			$this->job->add_message( '<h3>Posts deployed to the live site:</h3>' . $output );
+		}
+
+		do_action( 'sme_imported', $this->job );
 	}
 }

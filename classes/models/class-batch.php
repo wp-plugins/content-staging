@@ -3,14 +3,7 @@ namespace Me\Stenberg\Content\Staging\Models;
 
 use Exception;
 
-class Batch {
-
-	/**
-	 * ID of this batch.
-	 *
-	 * @var int
-	 */
-	private $id;
+class Batch extends Model {
 
 	/**
 	 * Global unique identifier (GUID) of this batch.
@@ -35,10 +28,11 @@ class Batch {
 	private $content;
 
 	/**
-	 * ID of user who created this batch.
-	 * @var
+	 * User who created this batch.
+	 *
+	 * @var User
 	 */
-	private $creator_id;
+	private $creator;
 
 	/**
 	 * Date when this batch was created. Timezone according to settings of
@@ -71,6 +65,16 @@ class Batch {
 	private $modified_gmt;
 
 	/**
+	 * @var string
+	 */
+	private $status;
+
+	/**
+	 * @var string Content staging environment backend URL.
+	 */
+	private $backend;
+
+	/**
 	 * Posts in this batch.
 	 *
 	 * @var array
@@ -92,6 +96,14 @@ class Batch {
 	private $users;
 
 	/**
+	 * Meta keys containing a relationship between two posts. The meta keys
+	 * refers to the 'meta_key' column in the 'postmeta' database table.
+	 *
+	 * @var array
+	 */
+	private $post_rel_keys;
+
+	/**
 	 * Custom data added by third-party developer.
 	 *
 	 * @var array
@@ -104,26 +116,13 @@ class Batch {
 	 * @param int $id
 	 */
 	public function __construct( $id = null ) {
-		$this->id          = $id;
-		$this->meta_data   = array();
-		$this->posts       = array();
-		$this->attachments = array();
-		$this->users       = array();
-		$this->custom_data = array();
-	}
-
-	/**
-	 * @param int $id
-	 */
-	public function set_id( $id ) {
-		$this->id = (int) $id;
-	}
-
-	/**
-	 * @return int
-	 */
-	public function get_id() {
-		return $this->id;
+		parent::__construct( (int) $id );
+		$this->meta_data     = array();
+		$this->posts         = array();
+		$this->attachments   = array();
+		$this->users         = array();
+		$this->post_rel_keys = array();
+		$this->custom_data   = array();
 	}
 
 	/**
@@ -141,17 +140,17 @@ class Batch {
 	}
 
 	/**
-	 * @param int $creator_id
+	 * @param User $creator
 	 */
-	public function set_creator_id( $creator_id ) {
-		$this->creator_id = (int) $creator_id;
+	public function set_creator( $creator ) {
+		$this->creator = $creator;
 	}
 
 	/**
-	 * @return int
+	 * @return User
 	 */
-	public function get_creator_id() {
-		return $this->creator_id;
+	public function get_creator() {
+		return $this->creator;
 	}
 
 	/**
@@ -222,6 +221,34 @@ class Batch {
 	 */
 	public function get_modified_gmt() {
 		return $this->modified_gmt;
+	}
+
+	/**
+	 * @param string $status
+	 */
+	public function set_status( $status ) {
+		$this->status = $status;
+	}
+
+	/**
+	 * @return string
+	 */
+	public function get_status() {
+		return $this->status;
+	}
+
+	/**
+	 * @return string
+	 */
+	public function get_backend() {
+		return $this->backend;
+	}
+
+	/**
+	 * @param string $backend
+	 */
+	public function set_backend( $backend ) {
+		$this->backend = $backend;
 	}
 
 	/**
@@ -304,6 +331,20 @@ class Batch {
 	 */
 	public function get_users() {
 		return $this->users;
+	}
+
+	public function set_post_rel_keys( array $keys ) {
+		$this->post_rel_keys = $keys;
+	}
+
+	public function add_post_rel_key( $key ) {
+		if ( ! in_array( $key, $this->post_rel_keys ) ) {
+			$this->post_rel_keys[] = $key;
+		}
+	}
+
+	public function get_post_rel_keys() {
+		return $this->post_rel_keys;
 	}
 
 	/**

@@ -9,12 +9,12 @@ class API {
 	private $post_dao;
 	private $postmeta_dao;
 
-	public function __construct( Post_DAO $post_dao, Postmeta_DAO $postmeta_dao ) {
-		$this->post_dao = $post_dao;
-		$this->postmeta_dao = $postmeta_dao;
+	public function __construct() {
+		$this->post_dao     = Helper_Factory::get_instance()->get_dao( 'Post' );
+		$this->postmeta_dao = Helper_Factory::get_instance()->get_dao( 'Postmeta' );
 	}
 
 	public function get_post_by_guid( $guid ) {
-		return $this->post_dao->get_post_by_guid( $guid );
+		return $this->post_dao->get_by_guid( $guid );
 	}
 }
