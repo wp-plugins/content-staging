@@ -1,20 +1,40 @@
 <?php
 namespace Me\Stenberg\Content\Staging\XMLRPC;
 
+use Me\Stenberg\Content\Staging\Models\Message;
 use \WP_HTTP_IXR_Client;
 
-class Client {
+class Client extends WP_HTTP_IXR_Client {
 
-	private $server;
 	private $secret_key;
-	private $wp_http_ixr_client;
-	private $request;
-	private $response;
+	private $filtered_request;
+	private $filtered_response;
 
-	public function __construct( $server, $secret_key ) {
-		$this->server = $server;
+	public function __construct() {
+
+		$endpoint   = 'http://[YOUR_ENDPOINT_HERE]';
+		$secret_key = 'YOUR_SECRET_KEY';
+
+		if ( defined( 'CONTENT_STAGING_ENDPOINT' ) && CONTENT_STAGING_ENDPOINT ) {
+			$endpoint = CONTENT_STAGING_ENDPOINT;
+		} else if ( $endpoint_opt = get_option( 'sme_cs_endpoint' ) ) {
+			$endpoint = $endpoint_opt;
+		}
+
+		// Set secret key.
+		if ( defined( 'CONTENT_STAGING_SECRET_KEY' ) && CONTENT_STAGING_SECRET_KEY ) {
+			$secret_key = CONTENT_STAGING_SECRET_KEY;
+		} else if ( $secret_key_opt = get_option( 'sme_cs_secret_key' ) ) {
+			$secret_key = $secret_key_opt;
+		}
+
+		// Allow filtering of endpoint and secret key.
+		$endpoint   = apply_filters( 'sme_endpoint', $endpoint );
+		$secret_key = apply_filters( 'sme_secret_key', $secret_key );
+
 		$this->secret_key = $secret_key;
-		$this->wp_http_ixr_client = new WP_HTTP_IXR_Client( trailingslashit( $server ) . 'xmlrpc.php', false, false, CONTENT_STAGING_TRANSFER_TIMEOUT );
+
+		parent::__construct( trailingslashit( $endpoint ) . 'xmlrpc.php', false, false, CONTENT_STAGING_TRANSFER_TIMEOUT );
 	}
 
 	/**
@@ -24,15 +44,20 @@ class Client {
 	 * @param array $data
 	 * @return array
 	 */
-	public function query( $method, $data = array() ) {
-
+	public function request( $method, $data = array() ) {
 		$data = $this->encode( serialize( $data ) );
 
 		$args = array(
 			$method,
 			$this->generate_access_token( $data ),
-			$data
+			$data,
 		);
+
+		// Allow custom path to send XML-RPC request to.
+		$this->path = apply_filters( 'sme_xmlrpc_path', $this->path );
+
+		// Allow custom headers.
+		$this->headers = apply_filters( 'sme_client_headers', array() );
 
 		// Disable SSL verification (based on user settings).
 		$this->disable_ssl_verification();
@@ -41,26 +66,63 @@ class Client {
 		 * Perform the XML-RPC request. A HTTP status code is returned indicating
 		 * whether the request was successful (200) or not (any other code).
 		 */
-		$status = call_user_func_array( array( $this->wp_http_ixr_client, 'query' ), $args );
+		$status = call_user_func_array( array( $this, 'query' ), $args );
 
 		// Enable SSL verification.
 		$this->enable_ssl_verification();
 
 		if ( ! $status ) {
-			/*
-			 * @todo No response! Give all possible feedback to user, e.g. could it be that
-			 * server address is wrong? Print server address.
-			 */
-			$this->response = array(
-				'error' => array(
-					$this->wp_http_ixr_client->getErrorMessage() . ' - on host: ' . $this->server . ' (error code ' . $this->wp_http_ixr_client->getErrorCode() . ')'
+
+			if ( strpos( $this->getErrorMessage(), 'requested method smeContentStaging.verify does not exist' ) !== false ) {
+				$message = new Message();
+				$message->set_level( 'error' );
+				$message->set_message(
+					sprintf( 'Content Staging plugin not activated on host <strong>%s</strong>', $this->server )
+				);
+
+				$this->filtered_response = array(
+					'status'   => 2,
+					'messages' => array( $message ),
+				);
+
+				return;
+			}
+
+			if ( strpos( $this->getErrorMessage(), 'Could not resolve host' ) !== false ) {
+				$message = new Message();
+				$message->set_level( 'error' );
+				$message->set_message(
+					sprintf( 'Could not connect to host <strong>%s</strong>', $this->server )
+				);
+
+				$this->filtered_response = array(
+					'status'   => 2,
+					'messages' => array( $message ),
+				);
+
+				return;
+			}
+
+			$message = new Message();
+			$message->set_level( 'error' );
+			$message->set_message(
+				sprintf(
+					'%s - on host: %s (error code %s)',
+					$this->getErrorMessage(),
+					$this->server,
+					$this->getErrorCode()
 				)
+			);
+
+			$this->filtered_response = array(
+				'status'   => 2,
+				'messages' => array( $message ),
 			);
 
 		} else {
 
 			// Get the XML-RPC response data.
-			$this->response = unserialize( $this->decode( $this->wp_http_ixr_client->getResponse() ) );
+			$this->filtered_response = unserialize( $this->decode( $this->getResponse() ) );
 		}
 	}
 
@@ -75,15 +137,29 @@ class Client {
 	public function handle_request( $args ) {
 
 		if ( ! isset( $args[0] ) ) {
-			return $this->prepare_response(
-				array( 'error' => array( 'No access token has been provided. Request failed.' ) )
+			$message = new Message();
+			$message->set_level( 'error' );
+			$message->set_message( 'No access token has been provided. Request failed.' );
+
+			$response = array(
+				'status'   => 2,
+				'messages' => array( $message ),
 			);
+
+			return $this->prepare_response( $response );
 		}
 
 		if ( ! isset( $args[1] ) ) {
-			return $this->prepare_response(
-				array( 'error' => array( 'No data has been provided. Request failed.' ) )
+			$message = new Message();
+			$message->set_level( 'error' );
+			$message->set_message( 'No data has been provided. Request failed.' );
+
+			$response = array(
+				'status'   => 2,
+				'messages' => array( $message ),
 			);
+
+			return $this->prepare_response( $response );
 		}
 
 		$access_token = $args[0];
@@ -97,17 +173,24 @@ class Client {
 
 			// Invalid access token, construct an error message.
 			$msg  = 'Authentication failed. ';
-			$msg .= '<strong>' . $_SERVER['HTTP_HOST'] . '</strong> did not accept the provided access token. <br/>';
+			$msg .= sprintf( '<strong>%s</strong> did not accept the provided access token. <br/>', $_SERVER['HTTP_HOST'] );
 			$msg .= 'Check that your content staging environment and your production environment is using the same secret key.';
 
 			// Respond with error message.
-			return $this->prepare_response(
-				array( 'error' => array( $msg ) )
+			$message = new Message();
+			$message->set_level( 'error' );
+			$message->set_message( $msg );
+
+			$response = array(
+				'status'   => 2,
+				'messages' => array( $message ),
 			);
+
+			return $this->prepare_response( $response );
 		}
 
 		// Get the request data.
-		$this->request = unserialize( $this->decode( $data ) );
+		$this->filtered_request = unserialize( $this->decode( $data ) );
 	}
 
 	/**
@@ -116,14 +199,14 @@ class Client {
 	 * @return mixed.
 	 */
 	public function get_request_data() {
-		return $this->request;
+		return $this->filtered_request;
 	}
 
 	/**
 	 * Return the response data.
 	 */
 	public function get_response_data() {
-		return $this->response;
+		return $this->filtered_response;
 	}
 
 	/**
@@ -140,6 +223,7 @@ class Client {
 	 * Prepare response data.
 	 *
 	 * @param array $response
+	 *
 	 * @return string
 	 */
 	public function prepare_response( $response ) {

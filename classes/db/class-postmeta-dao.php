@@ -1,10 +1,12 @@
 <?php
 namespace Me\Stenberg\Content\Staging\DB;
 
+use Me\Stenberg\Content\Staging\Models\Model;
+
 class Postmeta_DAO extends DAO {
 
 	public function __construct( $wpdb ) {
-		parent::__constuct( $wpdb );
+		parent::__construct( $wpdb );
 	}
 
 	/**
@@ -23,9 +25,111 @@ class Postmeta_DAO extends DAO {
 	}
 
 	/**
+	 * Insert multiple post meta records.
+	 *
+	 * @param array $records
+	 */
+	public function insert_post_meta_records( $records = array() ) {
+		$values = array();
+		$format = '';
+
+		for ( $i = 0; $i < count( $records ); $i++ ) {
+			if ( $i != 0 ) {
+				$format .= ',';
+			}
+			$values[] = $records[$i]['post_id'];
+			$values[] = $records[$i]['meta_key'];
+			$values[] = $records[$i]['meta_value'];
+			$format  .= '(%d, %s, %s)';
+		}
+
+		if ( ! $format ) {
+			return;
+		}
+
+		$this->wpdb->query(
+			$this->wpdb->prepare(
+				'INSERT INTO ' . $this->get_table() . ' (post_id, meta_key, meta_value) VALUES ' . $format,
+				$values
+			)
+		);
+	}
+
+	/**
+	 * Add post meta record.
+	 *
+	 * @param int    $post_id
+	 * @param string $key
+	 * @param string $value
+	 * @param bool   $unique
+	 *
+	 * @return int
+	 */
+	public function add_post_meta( $post_id, $key, $value, $unique = false ) {
+
+		if ( is_array( $value ) ) {
+			$value = serialize( $value );
+		}
+
+		$this->wpdb->insert(
+			$this->wpdb->postmeta,
+			array(
+				'post_id'    => $post_id,
+				'meta_key'   => $key,
+				'meta_value' => $value,
+			),
+			array( '%d', '%s', '%s' )
+		);
+	}
+
+	/**
+	 * Get post meta record(s).
+	 *
+	 * @param int    $post_id
+	 * @param string $key
+	 * @param bool   $single
+	 *
+	 * @return array
+	 */
+	public function get_post_meta( $post_id, $key = null, $single = false ) {
+
+		$where_stmt = 'post_id = %d';
+		$query_vars = array( $post_id );
+
+		if ( $key ) {
+			$where_stmt .= ' AND meta_key = %s';
+			array_push( $query_vars, $key );
+		}
+
+		$query = $this->wpdb->prepare(
+			'SELECT * FROM ' . $this->wpdb->postmeta . ' WHERE ' . $where_stmt,
+			$query_vars
+		);
+
+		$records = $this->wpdb->get_results( $query, ARRAY_A );
+
+		if ( isset( $records[0] ) && $single ) {
+			if ( is_serialized( $records[0]['meta_value'] ) ) {
+				return unserialize( $records[0]['meta_value'] );
+			}
+
+			return $records[0]['meta_value'];
+		}
+
+		$values = array();
+
+		foreach ( $records as $record ) {
+			array_push( $values, unserialize( $record['meta_value'] ) );
+		}
+
+		return $values;
+	}
+
+	/**
 	 * Insert postmeta.
 	 *
 	 * @param array $postmeta
+	 *
 	 * @return int|null Return generated meta_id on success, null otherwise.
 	 */
 	public function insert_postmeta( $postmeta ) {
@@ -56,10 +160,6 @@ class Postmeta_DAO extends DAO {
 			array( '%d', '%s', '%s' ),
 			array( '%d' )
 		);
-	}
-
-	public function delete_postmeta( $where, $where_format ) {
-		$this->wpdb->delete( $this->wpdb->postmeta, $where, $where_format );
 	}
 
 	/**
@@ -129,7 +229,7 @@ class Postmeta_DAO extends DAO {
 			$delete[] = $record;
 		}
 
-		foreach( $delete as $record ) {
+		foreach ( $delete as $record ) {
 			$this->delete_postmeta(
 				array( 'meta_id' => $record['meta_id'] ),
 				array( '%d' )
@@ -140,10 +240,30 @@ class Postmeta_DAO extends DAO {
 			$this->insert_postmeta( $record );
 		}
 
-		foreach( $update as $record ) {
+		foreach ( $update as $record ) {
 			$this->update_postmeta( $record );
 		}
 	}
+
+	public function delete_postmeta( $where, $where_format ) {
+		$this->wpdb->delete( $this->wpdb->postmeta, $where, $where_format );
+	}
+
+	/**
+	 * @return string
+	 */
+	protected function get_table() {
+		return $this->wpdb->postmeta;
+	}
+
+	protected function target_class() {}
+	protected function unique_key( array $raw ) {}
+	protected function select_stmt() {}
+	protected function select_by_ids_stmt( array $ids ) {}
+	protected function do_insert( Model $obj ) {}
+	protected function do_create_object( array $raw ) {}
+	protected function do_create_array( Model $obj ) {}
+	protected function format() {}
 
 	/**
 	 * Go through provided postmeta and filter out all values that we accept
@@ -179,4 +299,5 @@ class Postmeta_DAO extends DAO {
 			'format' => $format,
 		);
 	}
+
 }
