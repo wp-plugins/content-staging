@@ -9,36 +9,13 @@ use Me\Stenberg\Content\Staging\Models\Taxonomy;
 
 class Post_Taxonomy_DAO extends DAO {
 
-	private $table;
 	private $post_dao;
 	private $taxonomy_dao;
 
 	public function __construct( $wpdb ) {
-		parent::__constuct( $wpdb );
-		$this->table        = $wpdb->term_relationships;
+		parent::__construct( $wpdb );
 		$this->post_dao     = Helper_Factory::get_instance()->get_dao( 'Post' );
 		$this->taxonomy_dao = Helper_Factory::get_instance()->get_dao( 'Taxonomy' );
-	}
-
-	/**
-	 * Check if a relationship between a post and a taxonomy has been
-	 * persisted to database.
-	 *
-	 * @param Post_Taxonomy $post_taxonomy
-	 * @return bool
-	 */
-	public function has_post_taxonomy_relationship( Post_Taxonomy $post_taxonomy ) {
-		$query = $this->wpdb->prepare(
-			'SELECT COUNT(*) FROM ' . $this->table . ' WHERE object_id = %d AND term_taxonomy_id = %d',
-			$post_taxonomy->get_post()->get_id(),
-			$post_taxonomy->get_taxonomy()->get_id()
-		);
-
-		if ( $this->wpdb->get_var( $query ) > 0 ) {
-			return true;
-		}
-
-		return false;
 	}
 
 	/**
@@ -48,7 +25,7 @@ class Post_Taxonomy_DAO extends DAO {
 	 */
 	public function get_post_taxonomy_relationships( Post $post ) {
 		$query = $this->wpdb->prepare(
-			'SELECT * FROM ' . $this->table . ' WHERE object_id = %d',
+			'SELECT * FROM ' . $this->get_table() . ' WHERE object_id = %d',
 			$post->get_id()
 		);
 
@@ -62,24 +39,19 @@ class Post_Taxonomy_DAO extends DAO {
 	}
 
 	/**
+	 * Clear the Post_Taxonomy relationships informations.
+	 *
 	 * @param Post_Taxonomy $post_taxonomy
 	 */
-	public function update_post_taxonomy( Post_Taxonomy $post_taxonomy ) {
-		$data  = $this->create_array( $post_taxonomy );
-		$where = array(
-			'object_id'        => $post_taxonomy->get_post()->get_id(),
-			'term_taxonomy_id' => $post_taxonomy->get_taxonomy()->get_id(),
-		);
-		$format       = $this->format();
-		$where_format = array( '%d', '%d' );
-		$this->update( $data, $where, $format, $where_format );
+	public function clear_post_taxonomy_relationships( Post_Taxonomy $post_taxonomy ) {
+		$this->wpdb->delete( $this->wpdb->term_relationships, array( 'object_id' => $post_taxonomy->get_post()->get_id() ) );
 	}
 
 	/**
 	 * @return string
 	 */
 	protected function get_table() {
-		return $this->table;
+		return $this->wpdb->term_relationships;
 	}
 
 	/**
@@ -118,7 +90,7 @@ class Post_Taxonomy_DAO extends DAO {
 	protected function do_insert( Model $obj ) {
 		$data   = $this->create_array( $obj );
 		$format = $this->format();
-		$this->wpdb->insert( $this->table, $data, $format );
+		$this->wpdb->insert( $this->get_table(), $data, $format );
 	}
 
 	/**

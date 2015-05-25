@@ -1,18 +1,23 @@
 <?php
 namespace Me\Stenberg\Content\Staging;
 
-use Me\Stenberg\Content\Staging\XMLRPC\Client;
+use Me\Stenberg\Content\Staging\Controllers\Batch_Ctrl;
+use Me\Stenberg\Content\Staging\Controllers\Batch_History_Ctrl;
+use Me\Stenberg\Content\Staging\Controllers\Settings_Ctrl;
 
 class Setup {
 
-	private $router;
-	private $xmlrpc_client;
 	private $plugin_url;
+	private $batch_ctrl;
+	private $batch_history_ctrl;
+	private $settings_ctrl;
 
-	public function __construct( Router $router, Client $xmlrpc_client, $plugin_url ) {
-		$this->router        = $router;
-		$this->xmlrpc_client = $xmlrpc_client;
-		$this->plugin_url    = $plugin_url;
+	public function __construct( $plugin_url, Batch_Ctrl $batch_ctrl, Batch_History_Ctrl $batch_history_ctrl,
+								 Settings_Ctrl $settings_ctrl ) {
+		$this->plugin_url         = $plugin_url;
+		$this->batch_ctrl         = $batch_ctrl;
+		$this->batch_history_ctrl = $batch_history_ctrl;
+		$this->settings_ctrl      = $settings_ctrl;
 	}
 
 	/**
@@ -25,10 +30,10 @@ class Setup {
 		 * wp_enqueue_script() function, which safely handles any script
 		 * dependencies.
 		 */
-		wp_register_script( 'content-staging', $this->plugin_url . '/assets/js/content-staging.js', array( 'jquery' ), '1.1.3', false );
+		wp_register_script( 'content-staging', $this->plugin_url . '/assets/js/content-staging.js', array( 'jquery' ), '1.2.7', false );
 
 		// Register CSS stylesheet files for later use with wp_enqueue_style().
-		wp_register_style( 'content-staging', $this->plugin_url . '/assets/css/content-staging.css', array(), '1.0.3' );
+		wp_register_style( 'content-staging', $this->plugin_url . '/assets/css/content-staging.css', array(), '1.0.4' );
 
 		/*
 		 * Link script files to the generated page at the right time according to
@@ -67,38 +72,18 @@ class Setup {
 			'supports'    => array( 'title', 'editor' ),
 		);
 
-		// Arguments for batch importer post type
-		$import_job = array(
-			'label'  => __( 'Batch Import Jobs', 'sme-content-staging' ),
-			'labels' => array(
-				'singular_name'      => __( 'Batch Import Jobs', 'sme-content-staging' ),
-				'add_new_item'       => __( 'Add New Batch Import Job', 'sme-content-staging' ),
-				'edit_item'          => __( 'Edit Batch Import Job', 'sme-content-staging' ),
-				'new_item'           => __( 'New Batch Import Job', 'sme-content-staging' ),
-				'view_item'          => __( 'View Batch Import Job', 'sme-content-staging' ),
-				'search_items'       => __( 'Search Batch Import Jobs', 'sme-content-staging' ),
-				'not_found'          => __( 'No Batch Import Jobs found', 'sme-content-staging' ),
-				'not_found_in_trash' => __( 'No Batch Import Jobs found in Trash', 'sme-content-staging' )
-			),
-			'description' => __( 'Batches are packaged in Batch Import Jobs that in turn is imported by Batch Importers.', 'sme-content-staging' ),
-			'public'      => false,
-			'supports'    => array( 'editor' ),
-		);
-
 		register_post_type( 'sme_content_batch', $batch );
-		register_post_type( 'sme_batch_import_job', $import_job );
-
-
 	}
 
 	public function register_menu_pages() {
-		add_menu_page( 'Content Staging', 'Content Staging', 'manage_options', 'sme-list-batches', array( $this->router, 'batch_list' ) );
-		add_submenu_page( 'sme-list-batches', 'History', 'History', 'manage_options', 'sme-batch-history', array( $this->router, 'batch_history' ) );
-		add_submenu_page( null, 'Edit Batch', 'Edit', 'manage_options', 'sme-edit-batch', array( $this->router, 'batch_edit' ) );
-		add_submenu_page( null, 'Delete Batch', 'Delete', 'manage_options', 'sme-delete-batch', array( $this->router, 'batch_confirm_delete' ) );
-		add_submenu_page( null, 'Pre-Flight Batch', 'Pre-Flight', 'manage_options', 'sme-preflight-batch', array( $this->router, 'batch_prepare' ) );
-		add_submenu_page( null, 'Quick Deploy Batch', 'Quick Deploy', 'manage_options', 'sme-quick-deploy-batch', array( $this->router, 'batch_deploy_quick' ) );
-		add_submenu_page( null, 'Deploy Batch', 'Deploy', 'manage_options', 'sme-send-batch', array( $this->router, 'batch_deploy' ) );
+		add_menu_page( 'Content Staging', 'Content Staging', 'manage_options', 'sme-list-batches', array( $this->batch_ctrl, 'list_batches' ) );
+		add_submenu_page( 'sme-list-batches', 'History', 'History', 'manage_options', 'sme-batch-history', array( $this->batch_history_ctrl, 'init' ) );
+		add_submenu_page( 'sme-list-batches', 'Settings', 'Settings', 'manage_options', 'sme-settings', array( $this->settings_ctrl, 'init' ) );
+		add_submenu_page( null, 'Edit Batch', 'Edit', 'manage_options', 'sme-edit-batch', array( $this->batch_ctrl, 'edit_batch' ) );
+		add_submenu_page( null, 'Delete Batch', 'Delete', 'manage_options', 'sme-delete-batch', array( $this->batch_ctrl, 'confirm_delete_batch' ) );
+		add_submenu_page( null, 'Pre-Flight Batch', 'Pre-Flight', 'manage_options', 'sme-preflight-batch', array( $this->batch_ctrl, 'prepare' ) );
+		add_submenu_page( null, 'Quick Deploy Batch', 'Quick Deploy', 'manage_options', 'sme-quick-deploy-batch', array( $this->batch_ctrl, 'quick_deploy' ) );
+		add_submenu_page( null, 'Deploy Batch', 'Deploy', 'manage_options', 'sme-send-batch', array( $this->batch_ctrl, 'deploy' ) );
 	}
 
 	/**
@@ -122,8 +107,9 @@ class Setup {
 	 */
 	public function register_xmlrpc_methods( $methods ) {
 
-		$methods['smeContentStaging.verify'] = array( $this->router, 'batch_verify' );
-		$methods['smeContentStaging.import'] = array( $this->router, 'batch_import' );
+		$methods['smeContentStaging.verify'] = array( $this->batch_ctrl, 'verify' );
+		$methods['smeContentStaging.import'] = array( $this->batch_ctrl, 'import' );
+		$methods['smeContentStaging.importStatus'] = array( $this->batch_ctrl, 'import_status' );
 
 		return $methods;
 	}

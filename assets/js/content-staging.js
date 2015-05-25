@@ -27,6 +27,9 @@ jQuery( document ).ready(function($) {
 					case 'admin_page_sme-edit-batch':
 						this.editBatch();
 						break;
+					case 'admin_page_sme-preflight-batch':
+						this.preflightBatch();
+						break;
 					case 'admin_page_sme-send-batch':
 						this.deployBatch();
 						break;
@@ -173,32 +176,21 @@ jQuery( document ).ready(function($) {
 			document.cookie = 'wp-sme-bpl=' + batchId + ':' + postIds.join() + ':' + batchTitle;
 		},
 
-		/**
-		 * User is currently on the Deploy Batch page.
-		 */
-		deployBatch: function() {
+		preflightBatch: function() {
 
 			var data = {
-				action: 'sme_import_request',
-				job_id: $('#sme-batch-import-job-id').html(),
-				importer: $('#sme-batch-importer-type').html()
+				action: 'sme_preflight_request',
+				batch_id: $('#sme-batch-id').html(),
+				batch_guid: $('#sme-batch-guid').html()
 			};
 
-			var printed = $('.sme-deploy-messages .sme-cs-message').length;
-
-			// Check if a batch importer ID has been found.
-			if (data.job_id && data.importer) {
-				this.deployStatus(data, printed);
+			// Check if a batch ID has been found.
+			if (data.batch_guid && data.batch_id) {
+				this.preflightStatus(data);
 			}
 		},
 
-		/**
-		 * Get batch import status.
-		 *
-		 * @param data
-		 * @param printed Number of messages that has been printed.
-		 */
-		deployStatus: function(data, printed) {
+		preflightStatus: function(data) {
 
 			var self = this;
 
@@ -208,39 +200,69 @@ jQuery( document ).ready(function($) {
 				var nbrOfMsg = response.messages.length;
 				var reloadLoader = false;
 
-				// Only print messages we haven't printed before.
-				for (var i = printed; i < nbrOfMsg; i++) {
+				for (var i = 0; i < nbrOfMsg; i++) {
 					$('.sme-deploy-messages').append('<div class="sme-cs-message sme-cs-' + response.messages[i].level + '"><p>' + response.messages[i].message + '</p></div>');
-					printed++;
 				}
 
 				if (response.status > 1) {
 					$('#sme-importing').remove();
 				}
 
+				if (response.status == 3) {
+					$('#submit').removeAttr('disabled');
+				}
+
 				// If import is not completed, select import method.
 				if (response.status < 2) {
-					switch (data.importer) {
-						case 'ajax':
-							self.ajaxImport(data, printed);
-							break;
-						case 'background':
-							self.backgroundImport(data, printed);
-							break;
-					}
+					self.preflightStatus(data);
 				}
 			});
 		},
 
-		ajaxImport: function(data, printed) {
-			this.deployStatus(data, printed);
+		/**
+		 * User is currently on the Deploy Batch page.
+		 */
+		deployBatch: function() {
+
+			var data = {
+				action: 'sme_import_status_request',
+				batch_id: $('#sme-batch-id').html()
+			};
+
+			// Check if a batch ID has been found.
+			if (data.batch_id) {
+				this.deployStatus(data);
+			}
 		},
 
-		backgroundImport: function(data, printed) {
+		/**
+		 * Get batch import status.
+		 *
+		 * @param data
+		 */
+		deployStatus: function(data) {
+
 			var self = this;
-			setTimeout(function() {
-				self.deployStatus(data, printed);
-			}, 3000);
+
+			$.post(ajaxurl, data, function(response) {
+
+				// Number of messages in this response.
+				var nbrOfMsg = response.messages.length;
+				var reloadLoader = false;
+
+				for (var i = 0; i < nbrOfMsg; i++) {
+					$('.sme-deploy-messages').append('<div class="sme-cs-message sme-cs-' + response.messages[i].level + '"><p>' + response.messages[i].message + '</p></div>');
+				}
+
+				if (response.status > 1) {
+					$('#sme-importing').remove();
+				}
+
+				// If import is not yet completed, ask for deploy status again.
+				if (response.status < 2) {
+					self.deployStatus(data);
+				}
+			});
 		},
 
 		/**
@@ -265,6 +287,21 @@ jQuery( document ).ready(function($) {
 			return newArray;
 		}
 	};
+
+	// Bind this anonymous function to create a random 25
+	// character string, for the "secret key".
+	$( '#sme-generate-key' ).click(function(event) {
+		event.preventDefault();
+
+		var possible = 'ABCDEFGHIJKLMNOPQRSTUVWXWZabcdefghijklmnopqrstuvwxyz0123456789';
+		var text = [];
+
+		for(var i = 0; i < 36; i++) {
+			text.push(possible.charAt(Math.floor(Math.random() * possible.length)));
+		}
+
+		$( '#sme-secret-key' ).val(text.join(""));
+	});
 
 	// Initialize application.
 	app.init();

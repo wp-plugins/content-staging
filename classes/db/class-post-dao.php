@@ -1,16 +1,16 @@
 <?php
 namespace Me\Stenberg\Content\Staging\DB;
 
+use Me\Stenberg\Content\Staging\Models\Batch;
 use Me\Stenberg\Content\Staging\Models\Model;
 use Me\Stenberg\Content\Staging\Models\Post;
+use Me\Stenberg\Content\Staging\Models\Post_Env_Diff;
+use Exception;
 
 class Post_DAO extends DAO {
 
-	private $table;
-
 	public function __construct( $wpdb ) {
-		parent::__constuct( $wpdb );
-		$this->table = $wpdb->posts;
+		parent::__construct( $wpdb );
 	}
 
 	/**
@@ -18,20 +18,79 @@ class Post_DAO extends DAO {
 	 *
 	 * @param $guid
 	 * @return Post
+	 * @throws Exception
 	 */
 	public function get_by_guid( $guid ) {
-		$guid = $this->guid_regex( $guid );
 
 		// Select post with a specific GUID ending.
 		$query = $this->wpdb->prepare(
-			'SELECT * FROM ' . $this->wpdb->posts . ' WHERE guid REGEXP %s',
+			'SELECT * FROM ' . $this->wpdb->posts . ' WHERE guid = %s',
 			$guid
 		);
 
-		$result = $this->wpdb->get_row( $query, ARRAY_A );
+		$result = $this->wpdb->get_results( $query, ARRAY_A );
 
-		if ( isset( $result['ID'] ) ) {
-			return $this->create_object( $result );
+		if ( empty( $result ) ) {
+			return null;
+		}
+
+		if ( count( $result ) > 1 ) {
+			throw new Exception( sprintf( 'GUID %s is not unique', $guid ) );
+		}
+
+		if ( isset( $result[0] ) && isset( $result[0]['ID'] ) ) {
+			return $this->create_object( $result[0] );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Get post by permalink components.
+	 *
+	 * @param Post $post
+	 *
+	 * @return Post
+	 *
+	 * @throws Exception
+	 */
+	public function get_by_permalink( Post $post ) {
+
+		// Parent post ID.
+		$parent_id = ( $post->get_parent() !== null ) ? $post->get_parent()->get_id() : 0;
+
+		// Select post with a specific GUID ending.
+		$query = $this->wpdb->prepare(
+			'SELECT * FROM ' . $this->wpdb->posts . ' WHERE post_parent = %s AND post_name = %s AND post_type = %s',
+			$parent_id, $post->get_name(), $post->get_type()
+		);
+
+		$result = $this->wpdb->get_results( $query, ARRAY_A );
+
+		if ( empty( $result ) ) {
+			return null;
+		}
+
+		if ( count( $result ) > 1 ) {
+
+			// Get all post IDs.
+			$ids = array_map( function( $row ) {
+				return $row['ID'];
+			}, $result );
+
+			// Turn array of IDs into string of IDs.
+			$ids = implode( ', ', $ids );
+
+			throw new Exception(
+				sprintf(
+					'Permalink components not unique (post_parent: %d, post_name: %s, post_type: %s). Set unique permalink for the following post IDs: %s',
+					$parent_id, $post->get_name(), $post->get_type(), $ids
+				)
+			);
+		}
+
+		if ( isset( $result[0] ) && isset( $result[0]['ID'] ) ) {
+			return $this->create_object( $result[0] );
 		}
 
 		return null;
@@ -39,26 +98,29 @@ class Post_DAO extends DAO {
 
 	/**
 	 * Find post with the same global unique identifier (GUID) as the one for
-	 * the provided post. If a match is found, update provided post with the
-	 * post ID we got from database.
+	 * the provided post. If a match is found, return the post ID of matching
+	 * post.
 	 *
 	 * Useful for comparing a post sent from content staging to production.
 	 *
-	 * @param Post $post
+	 * @param string $guid
+	 *
+	 * @return int
 	 */
-	public function get_id_by_guid( Post $post ) {
-		$guid = $this->guid_regex( $post->get_guid() );
+	public function get_id_by_guid( $guid ) {
+
 		$query = $this->wpdb->prepare(
-			'SELECT ID FROM ' . $this->wpdb->posts . ' WHERE guid REGEXP %s',
+			'SELECT ID FROM ' . $this->wpdb->posts . ' WHERE guid = %s',
 			$guid
 		);
 
-		$post->set_id( $this->wpdb->get_var( $query ) );
+		return $this->wpdb->get_var( $query );
 	}
 
 	/**
 	 * Get published posts.
 	 *
+	 * @param array $statuses
 	 * @param string $order_by
 	 * @param string $order
 	 * @param int $per_page
@@ -66,11 +128,12 @@ class Post_DAO extends DAO {
 	 * @param array $selected
 	 * @return array
 	 */
-	public function get_published_posts( $order_by = null, $order = 'asc', $per_page = 5,
-										 $paged = 1, $selected = array() ) {
+	public function get_posts( $statuses = array(), $order_by = null, $order = 'asc', $per_page = 5,
+							   $paged = 1, $selected = array() ) {
 		$posts           = array();
 		$nbr_of_selected = count( $selected );
 		$limit           = $per_page;
+		$values          = array();
 
 		if ( ( $offset = ( ( $paged - 1 ) * $per_page ) - $nbr_of_selected ) < 0 ) {
 			$offset = 0;
@@ -89,9 +152,10 @@ class Post_DAO extends DAO {
 			$order = 'desc';
 		}
 
-		$where  = 'post_type != "sme_content_batch" AND post_status = "publish"';
+		$where  = 'post_type != "sme_content_batch" AND post_type != "sme_batch_import_job"';
+		$where  = $this->where_statuses( $where, $statuses, $values );
 		$where  = apply_filters( 'sme_query_posts_where', $where );
-		$values = apply_filters( 'sme_values_posts_where', array() );
+		$values = apply_filters( 'sme_values_posts_where', $values );
 		$stmt   = 'SELECT * FROM ' . $this->wpdb->posts . ' WHERE ' . $where;
 
 		if ( ( $nbr_of_selected = count( $selected ) ) > 0 ) {
@@ -122,45 +186,22 @@ class Post_DAO extends DAO {
 	}
 
 	/**
-	 * Get number of published posts that exists.
+	 * Get number of published content batches that exists.
 	 *
+	 * @param array $statuses
 	 * @return int
 	 */
-	public function get_published_posts_count() {
-		$where  = 'post_type != "sme_content_batch" AND post_status = "publish"';
+	public function get_posts_count( $statuses = array() ) {
+		$values = array();
+		$where  = 'post_type != "sme_content_batch" AND post_type != "sme_batch_import_job"';
+		$where  = $this->where_statuses( $where, $statuses, $values );
 		$where  = apply_filters( 'sme_query_posts_where', $where );
-		$values = apply_filters( 'sme_values_posts_where', array() );
+		$values = apply_filters( 'sme_values_posts_where', $values );
 		$query  = 'SELECT COUNT(*) FROM ' . $this->wpdb->posts . ' WHERE ' . $where;
 		if ( ! empty( $values ) ) {
-			$query  = $this->wpdb->prepare( $query, $values );
+			$query = $this->wpdb->prepare( $query, $values );
 		}
 		return $this->wpdb->get_var( $query );
-	}
-
-	/**
-	 * Get published posts that is newer then provided date.
-	 *
-	 * @param string $date
-	 * @return array
-	 */
-	public function get_published_posts_newer_then_modification_date( $date ) {
-
-		$posts = array();
-
-		$query = $this->wpdb->prepare(
-			'SELECT * FROM ' . $this->wpdb->posts . ' ' .
-			'WHERE post_status = "publish" AND post_type != "sme_content_batch" AND post_modified > %s ' .
-			'ORDER BY post_type ASC',
-			$date
-		);
-
-		foreach ( $this->wpdb->get_results( $query, ARRAY_A ) as $post ) {
-			if ( isset( $post['ID'] ) ) {
-				$posts[] = $this->create_object( $post );
-			}
-		}
-
-		return $posts;
 	}
 
 	/**
@@ -175,10 +216,120 @@ class Post_DAO extends DAO {
 	}
 
 	/**
+	 * Change post status for multiple posts.
+	 *
+	 * @param array $post_ids
+	 * @param string $status
+	 */
+	public function update_post_statuses( $post_ids = array(), $status = 'publish' ) {
+		if ( empty( $post_ids ) ) {
+			return;
+		}
+
+		// Comma separated string with IDs of all posts to change statuses for.
+		$ids = '';
+
+		// Populate $ids string with post IDs.
+		for ( $i = 0; $i < count( $post_ids ); $i++ ) {
+			if ( $i !== 0 ) {
+				$ids .= ',';
+			}
+			$ids .= $post_ids[$i];
+		}
+
+		if ( $ids ) {
+			$this->wpdb->query(
+				$this->wpdb->prepare(
+					'UPDATE ' . $this->get_table() . ' SET post_status = %s WHERE ID in (' . $ids . ')',
+					$status
+				)
+			);
+		}
+	}
+
+	/**
+	 * Change only the post status of a post.
+	 *
+	 * @param int $id
+	 * @param string $status
+	 */
+	public function update_post_status( $id, $status = 'publish' ) {
+		$this->update(
+			array( 'post_status' => $status ),
+			array( 'ID' => $id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+	}
+
+	/**
+	 * Change only the GUID of a post.
+	 *
+	 * @param $post_id
+	 * @param $new_guid
+	 */
+	public function update_guid( $post_id, $new_guid ) {
+		$this->update(
+			array( 'guid' => $new_guid ),
+			array( 'ID' => $post_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+	}
+
+	/**
+	 * Make a post a revision of another post.
+	 *
+	 * @param int $revision_id Post to change to revision.
+	 * @param int $parent_id Parent post of the revision.
+	 */
+	public function make_revision( $revision_id, $parent_id ) {
+		$this->update(
+			array(
+				'post_status' => 'inherit',
+				'post_parent' => $parent_id,
+				'post_name'   => $parent_id . '-revision-v1',
+				'post_type'   => 'revision',
+			),
+			array( 'ID' => $revision_id ),
+			array( '%s', '%d', '%s', '%s' ),
+			array( '%d' )
+		);
+	}
+
+	/**
+	 * Get post environment diff object for a batch.
+	 *
+	 * @param Batch $batch
+	 *
+	 * @return array
+	 */
+	public function get_post_diffs( Batch $batch ) {
+
+		$objects = array();
+		$diffs   = get_post_meta( $batch->get_id(), 'sme_post_diff' );
+
+		if ( empty( $diffs ) ) {
+			return $objects;
+		}
+
+		foreach ( $diffs as $diff ) {
+			$obj = new Post_Env_Diff( $diff['stage_id'] );
+			$obj->set_revision_id( $diff['revision_id'] );
+			$obj->set_prod_id( $diff['prod_id'] );
+			$obj->set_stage_status( $diff['stage_status'] );
+			$obj->set_parent_guid( $diff['parent_guid'] );
+			$objects[$diff['stage_id']] = $obj;
+		}
+
+		return $objects;
+	}
+
+	/**
 	 * @return string
 	 */
 	protected function get_table() {
-		return $this->table;
+		return $this->wpdb->posts;
 	}
 
 	/**
@@ -200,7 +351,7 @@ class Post_DAO extends DAO {
 	 * @return string
 	 */
 	protected function select_stmt() {
-		return 'SELECT * FROM ' . $this->table . ' WHERE ID = %d';
+		return 'SELECT * FROM ' . $this->get_table() . ' WHERE ID = %d';
 	}
 
 	/**
@@ -209,7 +360,7 @@ class Post_DAO extends DAO {
 	 */
 	protected function select_by_ids_stmt( array $ids ) {
 		$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
-		return 'SELECT * FROM ' . $this->table . ' WHERE ID in (' . $placeholders . ')';
+		return 'SELECT * FROM ' . $this->get_table() . ' WHERE ID in (' . $placeholders . ')';
 	}
 
 	/**
@@ -218,7 +369,7 @@ class Post_DAO extends DAO {
 	protected function do_insert( Model $obj ) {
 		$data   = $this->create_array( $obj );
 		$format = $this->format();
-		$this->wpdb->insert( $this->table, $data, $format );
+		$this->wpdb->insert( $this->get_table(), $data, $format );
 		$obj->set_id( $this->wpdb->insert_id );
 	}
 

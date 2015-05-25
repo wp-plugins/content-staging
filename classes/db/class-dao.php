@@ -1,14 +1,24 @@
 <?php
 namespace Me\Stenberg\Content\Staging\DB;
 
+use Exception;
 use Me\Stenberg\Content\Staging\Models\Model;
 use Me\Stenberg\Content\Staging\Object_Watcher;
+use wpdb;
 
 abstract class DAO {
 
+	/**
+	 * @var wpdb
+	 */
 	protected $wpdb;
 
-	protected function __constuct( $wpdb ) {
+	/**
+	 * Constructor.
+	 *
+	 * @param wpdb $wpdb
+	 */
+	protected function __construct( $wpdb ) {
 		$this->wpdb = $wpdb;
 	}
 
@@ -32,22 +42,20 @@ abstract class DAO {
 	 * Get any object that matches one of the provided IDs.
 	 *
 	 * @param array $ids Array of IDs.
+	 *
 	 * @return array
 	 */
 	public function find_by_ids( $ids ) {
 		$collection = array();
 
-		foreach ( $ids as $index => $id ) {
-			$old = $this->get_from_map( $id );
-			if ( ! is_null( $old ) ) {
-				$collection[] = $old;
-				unset( $ids[$index] );
-			}
-		}
-
 		if ( count( $ids ) < 1 ) {
 			return $collection;
 		}
+
+		// Repair broken arrays of IDs.
+		$ids = array_filter( $ids, function( $id ) {
+			return ( is_string( $id ) || is_int( $id ) );
+		});
 
 		$query = $this->wpdb->prepare( $this->select_by_ids_stmt( $ids ), $ids );
 		foreach ( $this->wpdb->get_results( $query, ARRAY_A ) as $record ) {
@@ -64,15 +72,17 @@ abstract class DAO {
 
 	/**
 	 * @param array $raw
+	 * @param array $args Additional information passed to implementing class.
+	 *
 	 * @return Model
 	 */
-	public function create_object( array $raw ) {
+	public function create_object( array $raw, $args = array() ) {
 		$key = $this->unique_key( $raw );
 		$old = $this->get_from_map( $key );
 		if ( ! is_null( $old ) ) {
 			return $old;
 		}
-		$obj = $this->do_create_object( $raw );
+		$obj = $this->do_create_object( $raw, $args );
 		$this->add_to_map( $obj );
 		return $obj;
 	}
@@ -102,6 +112,22 @@ abstract class DAO {
 	}
 
 	/**
+	 * Wrapper for WordPress function add_post_meta.
+	 *
+	 * @see http://codex.wordpress.org/Function_Reference/add_post_meta
+	 *
+	 * @param int    $post_id
+	 * @param string $key
+	 * @param mixed  $value
+	 * @param bool   $unique
+	 *
+	 * @return mixed
+	 */
+	public function add_post_meta( $post_id, $key, $value, $unique = false ) {
+		return add_post_meta( $post_id, $key, $value, $unique );
+	}
+
+	/**
 	 * Wrapper for WordPress function get_post_meta.
 	 *
 	 * @see http://codex.wordpress.org/Function_Reference/get_post_meta
@@ -128,6 +154,19 @@ abstract class DAO {
 	 */
 	public function update_post_meta( $post_id, $meta_key, $meta_value, $prev_value = null ) {
 		return update_post_meta( $post_id, $meta_key, $meta_value, $prev_value );
+	}
+
+	/**
+	 * Wrapper for WordPress function delete_post_meta.
+	 *
+	 * @see http://codex.wordpress.org/Function_Reference/delete_post_meta
+	 *
+	 * @param int    $post_id
+	 * @param string $key
+	 * @param mixed  $value
+	 */
+	public function delete_post_meta( $post_id, $key, $value = null ) {
+		delete_post_meta( $post_id, $key, $value );
 	}
 
 	protected abstract function get_table();
@@ -185,7 +224,28 @@ abstract class DAO {
 		}
 
 		$path = str_replace( $info['scheme'] . '://' . $info['host'], '', $guid );
-		return '(https?:\\/\\/)(.[^/]*)' . preg_quote( $path, '/' );
+		return '(https?:\\/\\/)(.[^/]*)' . preg_quote( $path, '/' ) . '$';
+	}
+
+	/**
+	 * Generate where part of SQL query for selecting batches with a
+	 * post_status included in the $statuses array.
+	 *
+	 * @param string $where
+	 * @param array $statuses
+	 * @param array $values
+	 * @return string
+	 */
+	protected function where_statuses( $where = '', array $statuses, array &$values ) {
+		if ( ! empty( $statuses ) ) {
+			for ( $i = 0; $i < count( $statuses ); $i++ ) {
+				$where .= ( $i == 0 ) ? ' AND (' : ' OR ';
+				$where .= 'post_status = %s';
+				$values[] = $statuses[$i];
+			}
+			$where .= ')';
+		}
+		return $where;
 	}
 
 	/**

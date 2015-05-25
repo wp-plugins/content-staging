@@ -4,7 +4,7 @@
  * Plugin URI: https://github.com/stenberg/content-staging
  * Description: Content Staging.
  * Author: Joakim Stenberg, Fredrik Hörte
- * Version: 1.2.2
+ * Version: 2.0.0
  * License: GPLv2
  */
 
@@ -30,27 +30,35 @@
 require_once( ABSPATH . WPINC . '/class-IXR.php' );
 require_once( ABSPATH . WPINC . '/class-wp-http-ixr-client.php' );
 require_once( ABSPATH . 'wp-admin/includes/class-wp-list-table.php' );
+require_once( 'classes/apis/class-common-api.php' );
 require_once( 'classes/controllers/class-batch-ctrl.php' );
 require_once( 'classes/controllers/class-batch-history-ctrl.php' );
+require_once( 'classes/controllers/class-settings-ctrl.php' );
 require_once( 'classes/db/class-dao.php' );
 require_once( 'classes/db/class-batch-dao.php' );
-require_once( 'classes/db/class-batch-import-job-dao.php' );
+require_once( 'classes/db/class-custom-dao.php' );
+require_once( 'classes/db/class-message-dao.php' );
 require_once( 'classes/db/class-post-dao.php' );
 require_once( 'classes/db/class-post-taxonomy-dao.php' );
 require_once( 'classes/db/class-postmeta-dao.php' );
 require_once( 'classes/db/class-taxonomy-dao.php' );
 require_once( 'classes/db/class-term-dao.php' );
 require_once( 'classes/db/class-user-dao.php' );
+require_once( 'classes/factories/class-dao-factory.php' );
 require_once( 'classes/importers/class-batch-importer.php' );
 require_once( 'classes/importers/class-batch-ajax-importer.php' );
 require_once( 'classes/importers/class-batch-background-importer.php' );
 require_once( 'classes/importers/class-batch-importer-factory.php' );
+require_once( 'classes/listeners/class-benchmark.php' );
+require_once( 'classes/listeners/class-import-message-listener.php' );
+require_once( 'classes/listeners/class-common-listener.php' );
 require_once( 'classes/managers/class-batch-mgr.php' );
 require_once( 'classes/managers/class-helper-factory.php' );
 require_once( 'classes/models/class-model.php' );
 require_once( 'classes/models/class-batch.php' );
-require_once( 'classes/models/class-batch-import-job.php' );
+require_once( 'classes/models/class-message.php' );
 require_once( 'classes/models/class-post.php' );
+require_once( 'classes/models/class-post-env-diff.php' );
 require_once( 'classes/models/class-taxonomy.php' );
 require_once( 'classes/models/class-term.php' );
 require_once( 'classes/models/class-user.php' );
@@ -59,10 +67,8 @@ require_once( 'classes/view/class-batch-table.php' );
 require_once( 'classes/view/class-batch-history-table.php' );
 require_once( 'classes/view/class-post-table.php' );
 require_once( 'classes/xmlrpc/class-client.php' );
-require_once( 'classes/class-api.php' );
 require_once( 'classes/class-background-process.php' );
 require_once( 'classes/class-object-watcher.php' );
-require_once( 'classes/class-router.php' );
 require_once( 'classes/class-setup.php' );
 require_once( 'classes/view/class-template.php' );
 require_once( 'functions/helpers.php' );
@@ -70,10 +76,13 @@ require_once( 'functions/helpers.php' );
 /*
  * Import classes.
  */
-use Me\Stenberg\Content\Staging\API;
+use Me\Stenberg\Content\Staging\Apis\Common_API;
 use Me\Stenberg\Content\Staging\Controllers\Batch_History_Ctrl;
-use Me\Stenberg\Content\Staging\Router;
+use Me\Stenberg\Content\Staging\Factories\DAO_Factory;
+use Me\Stenberg\Content\Staging\Listeners\Common_Listener;
+use Me\Stenberg\Content\Staging\Listeners\Import_Message_Listener;
 use Me\Stenberg\Content\Staging\Setup;
+use Me\Stenberg\Content\Staging\Controllers\Settings_Ctrl;
 use Me\Stenberg\Content\Staging\View\Template;
 use Me\Stenberg\Content\Staging\Controllers\Batch_Ctrl;
 use Me\Stenberg\Content\Staging\Importers\Batch_Importer_Factory;
@@ -101,7 +110,15 @@ class Content_Staging {
 	 */
 	public static function init() {
 
+		/**
+		 * @var Common_API $sme_content_staging_api
+		 */
 		global $sme_content_staging_api;
+
+		/**
+		 * @var wpdb $wpdb
+		 */
+		global $wpdb;
 
 		// Determine plugin URL and plugin path of this plugin.
 		$plugin_path = dirname( __FILE__ );
@@ -118,30 +135,41 @@ class Content_Staging {
 			closedir( $handle );
 		}
 
-		// Set endpoint.
-		$endpoint = apply_filters( 'sme_endpoint', CONTENT_STAGING_ENDPOINT );
-
-		// XML-RPC client.
-		$client = new Client( $endpoint, CONTENT_STAGING_SECRET_KEY );
-
 		// Managers / Factories.
-		$importer_factory = new Batch_Importer_Factory();
+		$dao_factory = new DAO_Factory( $wpdb );
 
 		// Template engine.
 		$template = new Template( dirname( __FILE__ ) . '/templates/' );
 
+		// XMLRPC client.
+		$xmlrpc_client = new Client();
+
+		/*
+		 * Content Staging API.
+		 *
+		 * Important! Do not change the name of this variable! It is used as a
+		 * global in the helpers.php scripts so third-party developers have a
+		 * way of working with the plugin using functions instead of classes.
+		 */
+		$sme_content_staging_api = new Common_API( $xmlrpc_client, $dao_factory );
+
+		// Importer.
+		$importer_factory = new Batch_Importer_Factory( $sme_content_staging_api, $dao_factory );
+
 		// Controllers.
-		$batch_ctrl         = new Batch_Ctrl( $template, $client, $importer_factory );
+		$batch_ctrl = new Batch_Ctrl(
+			$template, $importer_factory, $xmlrpc_client, $sme_content_staging_api, $dao_factory
+		);
+
 		$batch_history_ctrl = new Batch_History_Ctrl( $template );
+		$settings_ctrl 		= new Settings_Ctrl( $template );
 
-		// APIs.
-		$sme_content_staging_api = new API();
-
-		// Direct requests to the correct entry point.
-		$router = new Router( $batch_ctrl, $batch_history_ctrl );
+		// Listeners.
+		$import_messages = new Import_Message_Listener( $sme_content_staging_api, $dao_factory );
+		$common_listener = new Common_Listener( $sme_content_staging_api, $dao_factory );
 
 		// Plugin setup.
-		$setup = new Setup( $router, $client, $plugin_url );
+		$setup = new Setup( $plugin_url, $batch_ctrl, $batch_history_ctrl, $settings_ctrl );
 
 		// Actions.
 		add_action( 'init', array( $setup, 'register_post_types' ) );
@@ -149,15 +177,20 @@ class Content_Staging {
 		add_action( 'admin_menu', array( $setup, 'register_menu_pages' ) );
 		add_action( 'admin_notices', array( $setup, 'quick_deploy_batch' ) );
 		add_action( 'admin_enqueue_scripts', array( $setup, 'load_assets' ) );
-		add_action( 'admin_post_sme-save-batch', array( $router, 'batch_save' ) );
-		add_action( 'admin_post_sme-quick-deploy-batch', array( $router, 'batch_deploy_quick' ) );
-		add_action( 'admin_post_sme-delete-batch', array( $router, 'batch_delete' ) );
-		add_action( 'wp_ajax_sme_include_post', array( $router, 'ajax_batch_add_post' ) );
-		add_action( 'wp_ajax_sme_import_request', array( $router, 'ajax_batch_import' ) );
+
+		// Routing.
+		add_action( 'admin_post_sme-save-batch', array( $batch_ctrl, 'save_batch' ) );
+		add_action( 'admin_post_sme-quick-deploy-batch', array( $batch_ctrl, 'quick_deploy' ) );
+		add_action( 'admin_post_sme-delete-batch', array( $batch_ctrl, 'delete_batch' ) );
+		add_action( 'wp_ajax_sme_preflight_request', array( $batch_ctrl, 'preflight_status' ) );
+		add_action( 'wp_ajax_sme_import_status_request', array( $batch_ctrl, 'import_status_request' ) );
 
 		// Filters.
 		add_filter( 'xmlrpc_methods', array( $setup, 'register_xmlrpc_methods' ) );
 		add_filter( 'sme_post_relationship_keys', array( $setup, 'set_postmeta_post_relation_keys' ) );
+
+		// Content Staging loaded.
+		do_action( 'content_staging_loaded' );
 	}
 
 }

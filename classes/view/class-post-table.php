@@ -23,11 +23,13 @@ class Post_Table extends WP_List_Table {
 	public function __construct( Batch $batch ) {
 
 		// Set parent defaults.
-		parent::__construct( array(
-			'singular'  => 'post',
-			'plural'    => 'posts',
-			'ajax'      => false
-		) );
+		parent::__construct(
+			array(
+				'singular' => 'post',
+				'plural'   => 'posts',
+				'ajax'     => false,
+			)
+		);
 
 		$this->batch = $batch;
 	}
@@ -47,8 +49,8 @@ class Post_Table extends WP_List_Table {
 	 * @param array $column_name
 	 * @return string Text or HTML to be placed inside the column.
 	 */
-	public function column_default( Post $post, $column_name ) {
-		switch( $column_name ) {
+	public function column_default( $post, $column_name ) {
+		switch ( $column_name ) {
 			case 'post_title':
 				$value = $this->column_title( $post );
 				break;
@@ -92,9 +94,10 @@ class Post_Table extends WP_List_Table {
 	 * @param Post $post
 	 * @return string Text to be placed inside the column.
 	 */
-	public function column_cb( Post $post ) {
+	public function column_cb( $post ) {
 		return sprintf(
-			'<input type="checkbox" class="sme-select-post" name="%s[]" value="%s"/>',
+			'<input type="checkbox" id="sme_select_post_%s" class="sme-select-post" name="%s[]" value="%s"/>',
+			$post->get_id(),
 			$this->_args['plural'],
 			$post->get_id()
 		);
@@ -113,7 +116,7 @@ class Post_Table extends WP_List_Table {
 	public function get_columns() {
 		$columns = array( 'cb' => '<input type="checkbox" />' );
 		foreach ( $this->custom_items as $key => $item ) {
-			$columns[$key] = $item['title'];
+			$columns[ $key ] = $item['title'];
 		}
 		return $columns;
 	}
@@ -128,8 +131,8 @@ class Post_Table extends WP_List_Table {
 	public function get_sortable_columns() {
 		$columns = array();
 		foreach ( $this->custom_items as $key => $item ) {
-			if ( $item['sortable'] === true ) {
-				$columns[$key] = array( $item['sort_by'], $item['pre_sorted'] );
+			if ( true === $item['sortable'] ) {
+				$columns[ $key ] = array( $item['sort_by'], $item['pre_sorted'] );
 			}
 		}
 		return $columns;

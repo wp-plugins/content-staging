@@ -1,24 +1,17 @@
 <?php
 namespace Me\Stenberg\Content\Staging\Importers;
 
-use Me\Stenberg\Content\Staging\DB\Batch_Import_Job_DAO;
-use Me\Stenberg\Content\Staging\DB\Post_DAO;
-use Me\Stenberg\Content\Staging\DB\Post_Taxonomy_DAO;
-use Me\Stenberg\Content\Staging\DB\Postmeta_DAO;
-use Me\Stenberg\Content\Staging\DB\Taxonomy_DAO;
-use Me\Stenberg\Content\Staging\DB\Term_DAO;
-use Me\Stenberg\Content\Staging\DB\User_DAO;
-use Me\Stenberg\Content\Staging\Models\Batch_Import_Job;
+use Me\Stenberg\Content\Staging\Models\Batch;
 
 class Batch_AJAX_Importer extends Batch_Importer {
 
 	/**
 	 * Constructor.
 	 *
-	 * @param Batch_Import_Job $job
+	 * @param Batch $batch
 	 */
-	public function __construct( Batch_Import_Job $job ) {
-		parent::__construct( 'ajax', $job );
+	public function __construct( Batch $batch ) {
+		parent::__construct( $batch );
 	}
 
 	/**
@@ -26,62 +19,43 @@ class Batch_AJAX_Importer extends Batch_Importer {
 	 */
 	public function run() {
 
+		// Import is running.
+		$this->api->set_deploy_status( $this->batch->get_id(), 1 );
+
+		// Get first thing to import.
+		$first = $this->get_next();
+
+		// Store the first thing to import in database.
+		update_post_meta( $this->batch->get_id(), '_sme_import_next', $first );
+	}
+
+	/**
+	 * Import next item.
+	 */
+	public function status() {
+
 		// Make sure AJAX import has not already finished.
-		if ( $this->job->get_status() > 1 ) {
+		if ( $this->api->get_deploy_status( $this->batch->get_id() ) == 3 ) {
 			return;
 		}
 
-		$this->job->set_status( 1 );
-		$next = array(
-			'method' => 'import_attachment',
-			'params' => array(),
-			'index'  => -1,
-		);
-
-		if ( $val = get_post_meta( $this->job->get_id(), 'sme_parent_post_relations', true ) ) {
-			$this->parent_post_relations = $val;
-		}
-
-		if ( $val = get_post_meta( $this->job->get_id(), 'sme_post_relations', true ) ) {
-			$this->post_relations = $val;
-		}
-
-		if ( $val = get_post_meta( $this->job->get_id(), 'sme_posts_to_publish', true ) ) {
-			$this->posts_to_publish = $val;
-		}
-
-		if ( $val = get_post_meta( $this->job->get_id(), 'sme_import_next', true ) ) {
-			$next = $val;
-		} else {
-			// This is the first thing we are going to import.
-			$next = $this->get_next( $next );
-		}
+		// Get next thing to import from database.
+		$next = get_post_meta( $this->batch->get_id(), '_sme_import_next', true );
 
 		// Import.
 		call_user_func( array( $this, $next['method'] ), $next['params'] );
 
-		// Get next thing to import.
+		// Get next thing to import and store it in database.
 		$next = $this->get_next( $next );
+		update_post_meta( $this->batch->get_id(), '_sme_import_next', $next );
 
-		update_post_meta( $this->job->get_id(), 'sme_parent_post_relations', $this->parent_post_relations );
-		update_post_meta( $this->job->get_id(), 'sme_post_relations', $this->post_relations );
-		update_post_meta( $this->job->get_id(), 'sme_posts_to_publish', $this->posts_to_publish );
-		update_post_meta( $this->job->get_id(), 'sme_import_next', $next );
-
-		if ( empty( $next ) ) {
-			$this->job->add_message( 'Batch has been successfully imported!', 'success' );
-			$this->job->set_status( 3 );
-		}
-
-		$this->import_job_dao->update_job( $this->job );
-
-		if ( $this->job->get_status() > 1 ) {
+		if ( $this->api->get_deploy_status( $this->batch->get_id() ) == 3 ) {
 			/*
-			 * Delete importer. Importer is not actually deleted, just set to draft
+			 * Delete batch. Batch is not actually deleted, just set to draft
 			 * mode. This is important since we need to access e.g. meta data telling
-			 * us the status of the import even when import has finished.
+			 * us the status of the import even after import has finished.
 			 */
-			$this->import_job_dao->delete_job( $this->job );
+			$this->batch_dao->delete_batch( $this->batch );
 		}
 	}
 
@@ -91,11 +65,20 @@ class Batch_AJAX_Importer extends Batch_Importer {
 	 * @param array $current
 	 * @return array
 	 */
-	private function get_next( array $current ) {
+	private function get_next( $current = array() ) {
+
+		// Check if this is the first thing we are going to import.
+		if ( empty( $current ) ) {
+			$current = array(
+				'method' => 'import_attachment',
+				'params' => array(),
+				'index'  => -1,
+			);
+		}
 
 		// Attachments.
 		if ( $current['method'] == 'import_attachment' ) {
-			$attachments = $this->job->get_batch()->get_attachments();
+			$attachments = $this->batch->get_attachments();
 			if ( isset( $attachments[$current['index'] + 1] ) ) {
 				return array(
 					'method' => $current['method'],
@@ -112,7 +95,7 @@ class Batch_AJAX_Importer extends Batch_Importer {
 
 		// Users.
 		if ( $current['method'] == 'import_user' ) {
-			$users = $this->job->get_batch()->get_users();
+			$users = $this->batch->get_users();
 			if ( isset( $users[$current['index'] + 1] ) ) {
 				return array(
 					'method' => $current['method'],
@@ -129,7 +112,7 @@ class Batch_AJAX_Importer extends Batch_Importer {
 
 		// Posts.
 		if ( $current['method'] == 'import_post' ) {
-			$posts = $this->job->get_batch()->get_posts();
+			$posts = $this->batch->get_posts();
 			if ( isset( $posts[$current['index'] + 1] ) ) {
 				return array(
 					'method' => $current['method'],
@@ -139,7 +122,7 @@ class Batch_AJAX_Importer extends Batch_Importer {
 			} else {
 				// Method is post, but no posts is left to import.
 				return array(
-					'method' => 'import_all_postmeta',
+					'method' => 'import_posts_meta',
 					'params' => $posts,
 					'index'  => -1,
 				);
@@ -147,36 +130,31 @@ class Batch_AJAX_Importer extends Batch_Importer {
 		}
 
 		// Post meta.
-		if ( $current['method'] == 'import_all_postmeta' ) {
-			$current['method'] = 'import_custom_data';
-			$current['params'] = array();
-			$current['index']  = -1;
+		if ( $current['method'] == 'import_posts_meta' ) {
+			return array(
+				'method' => 'update_parent_post_relations',
+				'params' => $posts,
+				'index'  => -1,
+			);
 		}
 
 		// Parent post relationship.
 		if ( $current['method'] == 'update_parent_post_relations' ) {
-			$current['method'] = 'import_custom_data';
-			$current['params'] = array();
-			$current['index']  = -1;
+			return array(
+				'method' => 'import_custom_data',
+				'params' => array(),
+				'index'  => -1,
+			);
 		}
 
 		// Custom data.
 		if ( $current['method'] == 'import_custom_data' ) {
-			$custom = $this->job->get_batch()->get_custom_data();
-			if ( isset( $custom[$current['index'] + 1] ) ) {
-				return array(
-					'method' => $current['method'],
-					'params' => $custom[$current['index'] + 1],
-					'index'  => $current['index'] + 1,
-				);
-			} else {
-				// Method is custom data, but no custom data is left to import.
-				return array(
-					'method' => 'publish_posts',
-					'params' => array(),
-					'index'  => -1,
-				);
-			}
+			// Method is custom data, but no custom data is left to import.
+			return array(
+				'method' => 'publish_posts',
+				'params' => array(),
+				'index'  => -1,
+			);
 		}
 
 		// Finish and clean up.

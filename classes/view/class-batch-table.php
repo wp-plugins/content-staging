@@ -1,6 +1,8 @@
 <?php
 namespace Me\Stenberg\Content\Staging\View;
 
+use Me\Stenberg\Content\Staging\DB\Batch_DAO;
+use Me\Stenberg\Content\Staging\Helper_Factory;
 use Me\Stenberg\Content\Staging\Models\Batch;
 use WP_List_Table;
 
@@ -11,11 +13,13 @@ class Batch_Table extends WP_List_Table {
 	public function __construct() {
 
 		// Set parent defaults.
-		parent::__construct( array(
-			'singular'  => 'batch',
-			'plural'    => 'batches',
-			'ajax'      => false
-		) );
+		parent::__construct(
+			array(
+				'singular' => 'batch',
+				'plural'   => 'batches',
+				'ajax'     => false,
+			)
+		);
 
 		$this->actions = array();
 	}
@@ -24,16 +28,24 @@ class Batch_Table extends WP_List_Table {
 	 * Called if a column does not have a method that provides logic for
 	 * rendering that column.
 	 *
-	 * @param Batch $item
+	 * @param Batch $batch
 	 * @param array $column_name
 	 * @return string Text or HTML to be placed inside the column.
 	 */
-	public function column_default( Batch $item, $column_name ) {
-		switch( $column_name ) {
+	public function column_default( $batch, $column_name ) {
+
+		// Display name of user who created the batch.
+		$display_name = '';
+
+		if ( $batch->get_creator() !== null ) {
+			$display_name = $batch->get_creator()->get_display_name();
+		}
+
+		switch ( $column_name ) {
 			case 'post_modified':
-				return $item->get_modified();
+				return $batch->get_modified();
 			case 'post_author':
-				return $item->get_creator()->get_display_name();
+				return $display_name;
 			default:
 				return '';
 		}
@@ -66,6 +78,23 @@ class Batch_Table extends WP_List_Table {
 	}
 
 	/**
+	 * Display checkbox (e.g. for bulk actions). The checkbox should have the
+	 * value of the batch ID.
+	 *
+	 * @param Batch $batch
+	 *
+	 * @return string Text to be placed inside the column.
+	 */
+	public function column_cb( $batch ) {
+		return sprintf(
+			'<input type="checkbox" id="sme_select_batch_%s" class="sme-select-batch" name="%s[]" value="%s"/>',
+			$batch->get_id(),
+			$this->_args['plural'],
+			$batch->get_id()
+		);
+	}
+
+	/**
 	 * Set the table's columns and titles.
 	 *
 	 * The column named 'cb' will display checkboxes. Make sure to create a
@@ -77,6 +106,7 @@ class Batch_Table extends WP_List_Table {
 	 */
 	public function get_columns() {
 		return array(
+			'cb'            => '<input type="checkbox" />',
 			'post_title'    => 'Batch Title',
 			'post_modified' => 'Modified',
 			'post_author'   => 'Created By',
@@ -119,20 +149,6 @@ class Batch_Table extends WP_List_Table {
 	}
 
 	/**
-	 * Handle bulk actions.
-	 *
-	 * @see $this->prepare_items()
-	 */
-	public function process_bulk_action() {
-
-		// Detect when a bulk action is being triggered.
-		if ( 'delete' === $this->current_action() ) {
-			wp_die( 'Batches deleted!' );
-		}
-
-	}
-
-	/**
 	 * Prepare batches for being displayed.
 	 */
 	public function prepare_items() {
@@ -142,8 +158,6 @@ class Batch_Table extends WP_List_Table {
 		$sortable = $this->get_sortable_columns();
 
 		$this->_column_headers = array( $columns, $hidden, $sortable );
-
-		$this->process_bulk_action();
 	}
 
 }

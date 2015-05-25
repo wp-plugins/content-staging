@@ -6,11 +6,8 @@ use Me\Stenberg\Content\Staging\Models\User;
 
 class User_DAO extends DAO {
 
-	private $table;
-
 	public function __construct( $wpdb ) {
-		parent::__constuct( $wpdb );
-		$this->table = $wpdb->users;
+		parent::__construct( $wpdb );
 	}
 
 	/**
@@ -19,7 +16,7 @@ class User_DAO extends DAO {
 	 */
 	public function get_user_by_user_login( $user_login ) {
 		$query = $this->wpdb->prepare(
-			'SELECT * FROM ' . $this->table . ' WHERE user_login = %s',
+			'SELECT * FROM ' . $this->get_table() . ' WHERE user_login = %s',
 			$user_login
 		);
 
@@ -30,6 +27,21 @@ class User_DAO extends DAO {
 		}
 
 		return null;
+	}
+
+	/**
+	 * @param string $user_login
+	 *
+	 * @return int
+	 */
+	public function get_user_id_by_user_login( $user_login ) {
+
+		$query = $this->wpdb->prepare(
+			'SELECT ID FROM ' . $this->get_table() . ' WHERE user_login = %s',
+			$user_login
+		);
+
+		return $this->wpdb->get_var( $query );
 	}
 
 	/**
@@ -76,8 +88,7 @@ class User_DAO extends DAO {
 	/**
 	 * Update user meta.
 	 *
-	 * @param int $user_id
-	 * @param array $stage_records
+	 * @param User $user
 	 */
 	public function update_all_user_meta( User $user ) {
 
@@ -122,7 +133,7 @@ class User_DAO extends DAO {
 			} else {
 				foreach ( $stage_records as $stage_key => $stage_record ) {
 					if ( $stage_record['meta_key'] == $prod_record['meta_key'] ) {
-						$stage_record['user_id'] = $prod_record['user_id'];
+						$stage_record['user_id']  = $prod_record['user_id'];
 						$stage_record['umeta_id'] = $prod_record['umeta_id'];
 						$update[] = $stage_record;
 						unset( $stage_records[$stage_key] );
@@ -142,7 +153,7 @@ class User_DAO extends DAO {
 			$delete[] = $record;
 		}
 
-		foreach( $delete as $record ) {
+		foreach ( $delete as $record ) {
 			$this->delete_user_meta( $record['umeta_id'] );
 		}
 
@@ -150,7 +161,7 @@ class User_DAO extends DAO {
 			$this->insert_user_meta( $record );
 		}
 
-		foreach( $update as $record ) {
+		foreach ( $update as $record ) {
 			$this->update_user_meta( $record );
 		}
 	}
@@ -159,7 +170,7 @@ class User_DAO extends DAO {
 	 * @return string
 	 */
 	protected function get_table() {
-		return $this->table;
+		return $this->wpdb->users;
 	}
 
 	/**
@@ -181,7 +192,7 @@ class User_DAO extends DAO {
 	 * @return string
 	 */
 	protected function select_stmt() {
-		return 'SELECT * FROM ' . $this->table . ' WHERE ID = %d';
+		return 'SELECT * FROM ' . $this->get_table() . ' WHERE ID = %d';
 	}
 
 	/**
@@ -190,7 +201,7 @@ class User_DAO extends DAO {
 	 */
 	protected function select_by_ids_stmt( array $ids ) {
 		$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
-		return 'SELECT * FROM ' . $this->table . ' WHERE ID in (' . $placeholders . ')';
+		return 'SELECT * FROM ' . $this->get_table() . ' WHERE ID in (' . $placeholders . ')';
 	}
 
 	/**
@@ -200,8 +211,9 @@ class User_DAO extends DAO {
 		$data   = $this->create_array( $obj );
 		$format = $this->format();
 
-		$this->wpdb->insert( $this->table, $data, $format );
+		$this->wpdb->insert( $this->get_table(), $data, $format );
 		$obj->set_id( $this->wpdb->insert_id );
+
 		$this->insert_all_user_meta( $obj );
 	}
 
