@@ -1,29 +1,33 @@
 <?php
 namespace Me\Stenberg\Content\Staging\Models\Relationships;
 
+use Me\Stenberg\Content\Staging\Models\Model;
 use Me\Stenberg\Content\Staging\Models\Post;
 use Me\Stenberg\Content\Staging\Models\Taxonomy;
 
-class Post_Taxonomy {
+class Post_Taxonomy extends Model {
 
 	private $post;
 	private $taxonomy;
 	private $term_order;
 
 	/**
-	 * Constructor.
-	 *
-	 * Important that a Post and Taxonomy is set when constructing object!
-	 * Otherwise e.g. the 'set_taxonomy' method would fail in setting the
-	 * Taxonomy on the Post object.
-	 *
 	 * @param Post $post
 	 * @param Taxonomy $taxonomy
 	 */
 	public function __construct( Post $post, Taxonomy $taxonomy ) {
-		$this->post       = $post;
-		$this->taxonomy   = $taxonomy;
-		$this->term_order = 0;
+		parent::__construct();
+		$this->set_id( $post->get_id() . '-' . $taxonomy->get_id() );
+		$this->post     = $post;
+		$this->taxonomy = $taxonomy;
+	}
+
+	/**
+	 * @param Post $post
+	 */
+	public function set_post( Post $post ) {
+		$this->set_id( $post->get_id() . '-' . $this->taxonomy->get_id() );
+		$this->post = $post;
 	}
 
 	/**
@@ -31,6 +35,14 @@ class Post_Taxonomy {
 	 */
 	public function get_post() {
 		return $this->post;
+	}
+
+	/**
+	 * @param Taxonomy $taxonomy
+	 */
+	public function set_taxonomy( Taxonomy $taxonomy ) {
+		$this->set_id( $this->post->get_id() . '-' . $taxonomy->get_id() );
+		$this->taxonomy = $taxonomy;
 	}
 
 	/**

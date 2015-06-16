@@ -3,14 +3,7 @@ namespace Me\Stenberg\Content\Staging\Models;
 
 use Exception;
 
-class Batch {
-
-	/**
-	 * ID of this batch.
-	 *
-	 * @var int
-	 */
-	private $id;
+class Batch extends Model {
 
 	/**
 	 * Global unique identifier (GUID) of this batch.
@@ -27,18 +20,11 @@ class Batch {
 	private $title;
 
 	/**
-	 * Content of this batch.
+	 * User who created this batch.
 	 *
-	 * @todo Should not be in here.
-	 * @var string
+	 * @var User
 	 */
-	private $content;
-
-	/**
-	 * ID of user who created this batch.
-	 * @var
-	 */
-	private $creator_id;
+	private $creator;
 
 	/**
 	 * Date when this batch was created. Timezone according to settings of
@@ -71,6 +57,11 @@ class Batch {
 	private $modified_gmt;
 
 	/**
+	 * @var string
+	 */
+	private $status;
+
+	/**
 	 * Posts in this batch.
 	 *
 	 * @var array
@@ -92,6 +83,14 @@ class Batch {
 	private $users;
 
 	/**
+	 * Meta keys containing a relationship between two posts. The meta keys
+	 * refers to the 'meta_key' column in the 'postmeta' database table.
+	 *
+	 * @var array
+	 */
+	private $post_rel_keys;
+
+	/**
 	 * Custom data added by third-party developer.
 	 *
 	 * @var array
@@ -104,26 +103,13 @@ class Batch {
 	 * @param int $id
 	 */
 	public function __construct( $id = null ) {
-		$this->id          = $id;
-		$this->meta_data   = array();
-		$this->posts       = array();
-		$this->attachments = array();
-		$this->users       = array();
-		$this->custom_data = array();
-	}
-
-	/**
-	 * @param int $id
-	 */
-	public function set_id( $id ) {
-		$this->id = (int) $id;
-	}
-
-	/**
-	 * @return int
-	 */
-	public function get_id() {
-		return $this->id;
+		parent::__construct( (int) $id );
+		$this->meta_data     = array();
+		$this->posts         = array();
+		$this->attachments   = array();
+		$this->users         = array();
+		$this->post_rel_keys = array();
+		$this->custom_data   = array();
 	}
 
 	/**
@@ -141,31 +127,17 @@ class Batch {
 	}
 
 	/**
-	 * @param int $creator_id
+	 * @param User $creator
 	 */
-	public function set_creator_id( $creator_id ) {
-		$this->creator_id = (int) $creator_id;
+	public function set_creator( $creator ) {
+		$this->creator = $creator;
 	}
 
 	/**
-	 * @return int
+	 * @return User
 	 */
-	public function get_creator_id() {
-		return $this->creator_id;
-	}
-
-	/**
-	 * @param string $content
-	 */
-	public function set_content( $content ) {
-		$this->content = $content;
-	}
-
-	/**
-	 * @return string
-	 */
-	public function get_content() {
-		return $this->content;
+	public function get_creator() {
+		return $this->creator;
 	}
 
 	/**
@@ -222,6 +194,20 @@ class Batch {
 	 */
 	public function get_modified_gmt() {
 		return $this->modified_gmt;
+	}
+
+	/**
+	 * @param string $status
+	 */
+	public function set_status( $status ) {
+		$this->status = $status;
+	}
+
+	/**
+	 * @return string
+	 */
+	public function get_status() {
+		return $this->status;
 	}
 
 	/**
@@ -306,6 +292,20 @@ class Batch {
 		return $this->users;
 	}
 
+	public function set_post_rel_keys( array $keys ) {
+		$this->post_rel_keys = $keys;
+	}
+
+	public function add_post_rel_key( $key ) {
+		if ( ! in_array( $key, $this->post_rel_keys ) ) {
+			$this->post_rel_keys[] = $key;
+		}
+	}
+
+	public function get_post_rel_keys() {
+		return $this->post_rel_keys;
+	}
+
 	/**
 	 * Replace custom data with custom data in provided array.
 	 *
@@ -335,8 +335,8 @@ class Batch {
 	 * will be returned.
 	 *
 	 * @param string $key
+	 *
 	 * @return mixed
-	 * @throws Exception
 	 */
 	public function get_custom_data( $key = null ) {
 
@@ -347,10 +347,20 @@ class Batch {
 
 		// Make sure provided key exists in our custom data array.
 		if ( ! array_key_exists( $key, $this->custom_data ) ) {
-			throw new Exception( 'Could not find custom data with key ' . $key . ' in batch with ID ' . $this->get_id() );
+			return null;
 		}
 
 		return $this->custom_data[$key];
+	}
+
+	/**
+	 * Get a signature for this batch. Useful for testing if a batch has been
+	 * modified.
+	 *
+	 * @return string
+	 */
+	public function get_signature() {
+		return md5( serialize( $this ) );
 	}
 
 }

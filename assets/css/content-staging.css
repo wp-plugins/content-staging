@@ -31,7 +31,20 @@ div.sme-cs-success {
 .sme-input-text {
 	width: 100%;
 	padding: 6px 8px;
-	margin: 0;
+	margin: 0 0 10px 0;
 	line-height: 150%;
 	font-size: 1.7em;
+}
+
+.sme-loader-gif {
+	background: url('../img/loading-spin.svg') no-repeat;
+	background-size: 20px 20px;
+	float: left;
+	width: 20px;
+	height: 20px;
+	margin-right: 5px;
+}
+
+.column-sme_batch_history {
+	width: 30%;
 }

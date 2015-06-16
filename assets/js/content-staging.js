@@ -27,6 +27,9 @@ jQuery( document ).ready(function($) {
 					case 'admin_page_sme-edit-batch':
 						this.editBatch();
 						break;
+					case 'admin_page_sme-preflight-batch':
+						this.preflightBatch();
+						break;
 					case 'admin_page_sme-send-batch':
 						this.deployBatch();
 						break;
@@ -47,6 +50,7 @@ jQuery( document ).ready(function($) {
 		editBatch: function() {
 			var self       = this;
 			var batchId    = $('#sme-batch-id').html();
+			var titleObj   = $('input[name="batch_title"]');
 			var posts      = $('.sme-select-post');
 			var postIdsObj = $('input[name="post_ids"]');
 			var postIds    = [];
@@ -57,16 +61,7 @@ jQuery( document ).ready(function($) {
 			// Get value from cookie.
 			cookie = document.cookie.replace(/(?:(?:^|.*;\s*)wp-sme-bpl\s*\=\s*([^;]*).*$)|^.*$/, '$1');
 
-			if (cookie === '') {
-				/*
-				 * Cookie is empty, use post IDs from HTML form as selected posts.
-				 */
-				postIds = postIdsObj.val().split(',');
-			} else {
-				/*
-				 * Cookie has been populated. Use post IDs from cookie as selected posts.
-				 */
-
+			if (cookie !== '') {
 				// Split batch and posts.
 				batch = cookie.split(':');
 
@@ -75,11 +70,21 @@ jQuery( document ).ready(function($) {
 				 * cookie.
 				 */
 				if (batch[0] !== batchId) {
-					document.cookie = 'wp-sme-bpl=';
+					document.cookie = 'wp-sme-bpl=::';
 				} else {
 					// Add posts to array.
 					postIds = batch[1].split(',');
+
+					// Set batch title.
+					if (batch[2] !== 'undefined') {
+						titleObj.val(batch[2]);
+					}
 				}
+			}
+
+			// No selected post IDs found, try to grab them from HTML.
+			if (postIds.length <= 0) {
+				postIds = postIdsObj.val().split(',');
 			}
 
 			// Convert all post IDs to integers.
@@ -97,6 +102,11 @@ jQuery( document ).ready(function($) {
 				}
 			});
 
+			// User has changed batch title.
+			titleObj.change(function() {
+				self.updateBatchTitle(batchId, postIds, titleObj.val());
+			});
+
 			// User has selected/unselected a post.
 			posts.click(function() {
 				var postObj = $(this);
@@ -105,7 +115,7 @@ jQuery( document ).ready(function($) {
 				self.selectPost(postIds, parseInt(postObj.val()), postObj.prop('checked'));
 
 				// Update selected posts.
-				self.updateSelectedPosts(batchId, postIds, postIdsObj);
+				self.updateSelectedPosts(batchId, postIds, postIdsObj, titleObj.val());
 			});
 
 			// User has selected/unselected all posts.
@@ -117,7 +127,7 @@ jQuery( document ).ready(function($) {
 				});
 
 				// Update selected posts.
-				self.updateSelectedPosts(batchId, postIds, postIdsObj);
+				self.updateSelectedPosts(batchId, postIds, postIdsObj, titleObj.val());
 			});
 		},
 
@@ -150,15 +160,63 @@ jQuery( document ).ready(function($) {
 		 * @param {int} batchId
 		 * @param {Array} postIds
 		 * @param {Object} postIdsObj
+		 * @param {string} batchTitle
 		 */
-		updateSelectedPosts: function(batchId, postIds, postIdsObj) {
+		updateSelectedPosts: function(batchId, postIds, postIdsObj, batchTitle) {
 			var str = postIds.join();
 
 			// Add post IDs to HTML form.
 			postIdsObj.val(str);
 
 			// Add post IDs to cookie.
-			document.cookie = 'wp-sme-bpl=' + batchId + ':' + str;
+			document.cookie = 'wp-sme-bpl=' + batchId + ':' + str + ':' + batchTitle;
+		},
+
+		updateBatchTitle: function(batchId, postIds, batchTitle) {
+			document.cookie = 'wp-sme-bpl=' + batchId + ':' + postIds.join() + ':' + batchTitle;
+		},
+
+		preflightBatch: function() {
+
+			var data = {
+				action: 'sme_preflight_request',
+				batch_id: $('#sme-batch-id').html(),
+				batch_guid: $('#sme-batch-guid').html()
+			};
+
+			// Check if a batch ID has been found.
+			if (data.batch_guid && data.batch_id) {
+				this.preflightStatus(data);
+			}
+		},
+
+		preflightStatus: function(data) {
+
+			var self = this;
+
+			$.post(ajaxurl, data, function(response) {
+
+				// Number of messages in this response.
+				var nbrOfMsg = response.messages.length;
+				var reloadLoader = false;
+
+				for (var i = 0; i < nbrOfMsg; i++) {
+					$('.sme-deploy-messages').append('<div class="sme-cs-message sme-cs-' + response.messages[i].level + '"><p>' + response.messages[i].message + '</p></div>');
+				}
+
+				if (response.status > 1) {
+					$('#sme-importing').remove();
+				}
+
+				if (response.status == 3) {
+					$('#submit').removeAttr('disabled');
+				}
+
+				// If import is not completed, select import method.
+				if (response.status < 2) {
+					self.preflightStatus(data);
+				}
+			});
 		},
 
 		/**
@@ -167,16 +225,13 @@ jQuery( document ).ready(function($) {
 		deployBatch: function() {
 
 			var data = {
-				action: 'sme_import_request',
-				job_id: $('#sme-batch-import-job-id').html(),
-				importer: $('#sme-batch-importer-type').html()
+				action: 'sme_import_status_request',
+				batch_id: $('#sme-batch-id').html()
 			};
 
-			var printed = $('.sme-cs-message').length;
-
-			// Check if a batch importer ID has been found.
-			if (data.job_id && data.importer) {
-				this.deployStatus(data, printed);
+			// Check if a batch ID has been found.
+			if (data.batch_id) {
+				this.deployStatus(data);
 			}
 		},
 
@@ -184,9 +239,8 @@ jQuery( document ).ready(function($) {
 		 * Get batch import status.
 		 *
 		 * @param data
-		 * @param printed Number of messages that has been printed.
 		 */
-		deployStatus: function(data, printed) {
+		deployStatus: function(data) {
 
 			var self = this;
 
@@ -194,36 +248,21 @@ jQuery( document ).ready(function($) {
 
 				// Number of messages in this response.
 				var nbrOfMsg = response.messages.length;
+				var reloadLoader = false;
 
-				// Only print messages we haven't printed before.
-				for (var i = printed; i < nbrOfMsg; i++) {
-					$('.wrap').append('<div class="sme-cs-message sme-cs-' + response.messages[i].level + '"><p>' + response.messages[i].message + '</p></div>');
-					printed++;
+				for (var i = 0; i < nbrOfMsg; i++) {
+					$('.sme-deploy-messages').append('<div class="sme-cs-message sme-cs-' + response.messages[i].level + '"><p>' + response.messages[i].message + '</p></div>');
 				}
 
-				// If import is not completed, select import method.
+				if (response.status > 1) {
+					$('#sme-importing').remove();
+				}
+
+				// If import is not yet completed, ask for deploy status again.
 				if (response.status < 2) {
-					switch (data.importer) {
-						case 'ajax':
-							self.ajaxImport(data, printed);
-							break;
-						case 'background':
-							self.backgroundImport(data, printed);
-							break;
-					}
+					self.deployStatus(data);
 				}
 			});
-		},
-
-		ajaxImport: function(data, printed) {
-			this.deployStatus(data, printed);
-		},
-
-		backgroundImport: function(data, printed) {
-			var self = this;
-			setTimeout(function() {
-				self.deployStatus(data, printed);
-			}, 3000);
 		},
 
 		/**
@@ -248,6 +287,21 @@ jQuery( document ).ready(function($) {
 			return newArray;
 		}
 	};
+
+	// Bind this anonymous function to create a random 25
+	// character string, for the "secret key".
+	$( '#sme-generate-key' ).click(function(event) {
+		event.preventDefault();
+
+		var possible = 'ABCDEFGHIJKLMNOPQRSTUVWXWZabcdefghijklmnopqrstuvwxyz0123456789';
+		var text = [];
+
+		for(var i = 0; i < 36; i++) {
+			text.push(possible.charAt(Math.floor(Math.random() * possible.length)));
+		}
+
+		$( '#sme-secret-key' ).val(text.join(""));
+	});
 
 	// Initialize application.
 	app.init();
